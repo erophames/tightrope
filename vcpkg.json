@@ -18,6 +18,7 @@
     "quill",
     "tomlplusplus",
     "libuv",
+    "openssl",
     "curl",
     "catch2"
   ]

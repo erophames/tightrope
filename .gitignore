@@ -8,3 +8,4 @@ compile_commands.json
 vcpkg_installed/
 vcpkg/
 .local-py/
+.electron-dev/

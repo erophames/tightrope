@@ -7,8 +7,16 @@
 #include <string>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
 #include <sys/select.h>
+#endif
 
 #include "discovery/mdns_common.h"
 #include "discovery/internal/mdns_service_records.h"

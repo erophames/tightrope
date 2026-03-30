@@ -11,8 +11,16 @@
 #include <string>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <arpa/inet.h>
 #include <sys/select.h>
+#endif
 
 #include <boost/container/flat_map.hpp>
 

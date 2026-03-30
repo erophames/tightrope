@@ -100,6 +100,7 @@ find_package(quill CONFIG REQUIRED)
 find_package(tomlplusplus CONFIG REQUIRED)
 find_package(libuv CONFIG REQUIRED)
 find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 if(TARGET NuRaft::nuraft)
   set(TIGHTROPE_NURAFT_TARGET NuRaft::nuraft)
@@ -157,6 +158,7 @@ target_link_libraries(tightrope-core PRIVATE
   tomlplusplus::tomlplusplus
   $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
   CURL::libcurl
+  OpenSSL::SSL OpenSSL::Crypto
   ${TIGHTROPE_NODE_LIBS}
 )
 

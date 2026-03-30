@@ -5,7 +5,15 @@
 
 #include <boost/asio/ip/address.hpp>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 #include "discovery/mdns_common.h"
 

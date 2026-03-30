@@ -82,7 +82,45 @@ function nativeModuleCandidates(): string[] {
   );
 }
 
+function createNativeStubs(): NativeModule {
+  return {
+    async init() {},
+    async shutdown() {},
+    shutdownSync() {},
+    isRunning: () => false,
+    async getHealth() {
+      return { status: 'error', uptime_ms: 0 };
+    },
+    async clusterEnable() {},
+    async clusterDisable() {},
+    async clusterStatus() {
+      return {
+        enabled: false,
+        site_id: '',
+        cluster_name: '',
+        role: 'standalone',
+        term: 0,
+        commit_index: 0,
+        leader_id: null,
+        peers: [],
+        journal_entries: 0,
+        pending_raft_entries: 0,
+        last_sync_at: null,
+      };
+    },
+    async clusterAddPeer() {},
+    async clusterRemovePeer() {},
+    async syncTriggerNow() {},
+    async syncRollbackBatch() {},
+  };
+}
+
 function loadNative(): NativeModule {
+  if (process.env.TIGHTROPE_DISABLE_NATIVE === '1') {
+    console.warn('[tightrope] native module disabled by TIGHTROPE_DISABLE_NATIVE=1; running with stubs');
+    return createNativeStubs();
+  }
+
   let loadError: unknown;
   for (const modulePath of nativeModuleCandidates()) {
     if (!fs.existsSync(modulePath)) {
@@ -102,26 +140,7 @@ function loadNative(): NativeModule {
     console.warn('[tightrope] native module not found — running with stubs');
   }
 
-  return {
-    async init() {},
-    async shutdown() {},
-    shutdownSync() {},
-    isRunning: () => false,
-    async getHealth() { return { status: 'error', uptime_ms: 0 }; },
-    async clusterEnable() {},
-    async clusterDisable() {},
-    async clusterStatus() {
-      return {
-        enabled: false, site_id: '', cluster_name: '', role: 'standalone',
-        term: 0, commit_index: 0, leader_id: null, peers: [],
-        journal_entries: 0, pending_raft_entries: 0, last_sync_at: null,
-      };
-    },
-    async clusterAddPeer() {},
-    async clusterRemovePeer() {},
-    async syncTriggerNow() {},
-    async syncRollbackBatch() {},
-  };
+  return createNativeStubs();
 }
 
 export const native: NativeModule = loadNative();

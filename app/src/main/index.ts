@@ -2,6 +2,7 @@
 // Loads tightrope-core.node native module and exposes IPC handlers to renderer
 
 import * as path from 'path';
+import * as fs from 'fs';
 import { app, BrowserWindow } from 'electron';
 import { native } from './native';
 import { registerIpcHandlers, submitOauthManualCallback } from './ipc';
@@ -13,6 +14,15 @@ const skipNativeShutdownOnQuit = process.env.TIGHTROPE_SKIP_NATIVE_SHUTDOWN === 
 const DEEP_LINK_PROTOCOL = 'tightrope';
 const pendingDeepLinks: string[] = [];
 let deepLinkDrainInFlight: Promise<void> | null = null;
+const isDevSession = Boolean(process.env.VITE_DEV_SERVER_URL);
+
+if (isDevSession) {
+  const devUserDataPath = path.resolve(process.cwd(), '.electron-dev');
+  const devSessionPath = path.join(devUserDataPath, 'session');
+  fs.mkdirSync(devSessionPath, { recursive: true });
+  app.setPath('userData', devUserDataPath);
+  app.setPath('sessionData', devSessionPath);
+}
 
 function isTightropeDeepLink(value: string): boolean {
   return value.toLowerCase().startsWith(`${DEEP_LINK_PROTOCOL}://`);
@@ -156,11 +166,15 @@ app.whenReady().then(async () => {
   });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devServerUrl) {
-    await mainWindow.loadURL(devServerUrl);
-  } else {
-    const rendererPath = path.join(__dirname, '../renderer/index.html');
-    await mainWindow.loadFile(rendererPath);
+  try {
+    if (devServerUrl) {
+      await mainWindow.loadURL(devServerUrl);
+    } else {
+      const rendererPath = path.join(__dirname, '../renderer/index.html');
+      await mainWindow.loadFile(rendererPath);
+    }
+  } catch (error) {
+    console.error('[tightrope] renderer load failed', error);
   }
 
   const startupDeepLink = findDeepLinkArg(process.argv);
