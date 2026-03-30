@@ -372,6 +372,14 @@ TEST_CASE("uwebsockets runtime serves account admin endpoints", "[server][runtim
     REQUIRE(listed.find("200 OK") != std::string::npos);
     REQUIRE(listed.find(*account_id) != std::string::npos);
 
+    const auto refresh_usage = tightrope::tests::server::send_raw_http(
+        port,
+        "POST /api/accounts/" + *account_id +
+            "/refresh-usage HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    );
+    REQUIRE(refresh_usage.find("400 Bad Request") != std::string::npos);
+    REQUIRE(refresh_usage.find("\"code\":\"account_usage_unavailable\"") != std::string::npos);
+
     const auto paused = tightrope::tests::server::send_raw_http(
         port,
         "POST /api/accounts/" + *account_id + "/pause HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
