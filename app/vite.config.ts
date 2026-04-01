@@ -14,7 +14,7 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: path.resolve(__dirname, 'src/renderer/test/setup.ts'),
-    include: [path.resolve(__dirname, 'src/renderer/**/*.test.{ts,tsx}')],
+    include: ['**/*.test.{ts,tsx}'],
     css: true,
   },
 });

@@ -1,7 +1,10 @@
 #include "transport/replication_ingress.h"
 
+#include <chrono>
 #include <string>
 #include <utility>
+
+#include "sync_event_emitter.h"
 
 namespace tightrope::sync::transport {
 
@@ -113,7 +116,18 @@ ReplicationIngressOutcome ReplicationIngressSession::consume_frames(const std::s
             continue;
         }
 
+        const auto apply_start = std::chrono::steady_clock::now();
         const auto applied = sync::SyncEngine::apply_wire_batch(db_, request_, frame->payload);
+        const auto apply_duration_ms = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - apply_start).count());
+        SyncEventEmitter::get().emit(SyncEventIngressBatch{
+            .site_id           = std::to_string(request_.remote_handshake.site_id),
+            .accepted          = applied.success,
+            .bytes             = static_cast<std::uint64_t>(frame->payload.size()),
+            .apply_duration_ms = apply_duration_ms,
+            .replication_latency_ms = 0,
+        });
         if (!applied.success) {
             outcome.ok = false;
             outcome.error = applied.error;

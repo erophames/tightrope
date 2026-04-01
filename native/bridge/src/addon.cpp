@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "internal/addon_bindings_support.h"
+#include "sync_event_emitter.h"
 
 namespace {
 
@@ -346,6 +347,20 @@ Napi::Value sync_rollback_batch(const Napi::CallbackInfo& info) {
     );
 }
 
+Napi::Value register_sync_event_callback(const Napi::CallbackInfo& info) {
+    if (info.Length() < 1 || !info[0].IsFunction()) {
+        throw Napi::TypeError::New(info.Env(), "registerSyncEventCallback requires a function");
+    }
+    tightrope::sync::SyncEventEmitter::get().register_callback(
+        info.Env(), info[0].As<Napi::Function>());
+    return info.Env().Undefined();
+}
+
+Napi::Value unregister_sync_event_callback(const Napi::CallbackInfo& info) {
+    tightrope::sync::SyncEventEmitter::get().unregister_callback();
+    return info.Env().Undefined();
+}
+
 } // namespace
 
 Napi::Object InitAddon(Napi::Env env, Napi::Object exports) {
@@ -361,6 +376,8 @@ Napi::Object InitAddon(Napi::Env env, Napi::Object exports) {
     exports.Set("clusterRemovePeer", Napi::Function::New(env, cluster_remove_peer));
     exports.Set("syncTriggerNow", Napi::Function::New(env, sync_trigger_now));
     exports.Set("syncRollbackBatch", Napi::Function::New(env, sync_rollback_batch));
+    exports.Set("registerSyncEventCallback", Napi::Function::New(env, register_sync_event_callback));
+    exports.Set("unregisterSyncEventCallback", Napi::Function::New(env, unregister_sync_event_callback));
     return exports;
 }
 

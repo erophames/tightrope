@@ -2815,3 +2815,188 @@
           scroll-behavior: auto !important;
         }
       }
+
+/* ── Sync Topology Dialog ── */
+
+.sync-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.sync-popup-header-left {
+  display: grid;
+  gap: 0.05rem;
+}
+
+.sync-popup-header-left .eyebrow {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+.sync-popup-header-left h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.sync-popup-meta {
+  display: flex;
+  gap: 0.7rem;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.sync-popup-meta strong {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 10px;
+}
+
+.sync-popup-meta .accent-val {
+  color: var(--accent);
+}
+
+.sync-topology-area {
+  position: relative;
+  padding: 1.2rem 1rem 1rem;
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.sync-topology-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sync-nodes-layer {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4.5rem;
+}
+
+.sync-node-card {
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 0.4rem 0.6rem;
+  min-width: 140px;
+}
+
+.sync-node-card.leader {
+  border-color: var(--accent-border);
+  background: linear-gradient(180deg, rgba(122,171,156,0.04) 0%, var(--surface-3) 100%);
+  position: relative;
+}
+
+.sync-node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.sync-node-site-id {
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.02em;
+}
+
+.sync-role-badge {
+  font-size: 9px;
+  font-weight: 550;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0px 5px;
+  border-radius: 3px;
+  line-height: 1.6;
+}
+
+.sync-role-badge.leader {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-border);
+}
+
+.sync-role-badge.follower {
+  color: var(--text-secondary);
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+}
+
+.sync-role-badge.candidate {
+  color: var(--warn);
+  background: rgba(176,143,78,0.08);
+  border: 1px solid rgba(176,143,78,0.2);
+}
+
+.sync-node-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.1rem 0.6rem;
+}
+
+.sync-node-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  font-size: 10px;
+}
+
+.sync-node-stat .label {
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+}
+
+.sync-node-stat .value {
+  color: var(--text-secondary);
+  font-family: 'SF Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 450;
+}
+
+.sync-node-stat .value.lag { color: var(--warn); }
+.sync-node-stat .value.synced { color: var(--ok); }
+
+.sync-follower-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.sync-popup-footer {
+  padding: 0.35rem 0.75rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 0.8rem;
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+}
+
+.sync-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.sync-legend-swatch {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+}

@@ -21,7 +21,7 @@ struct ReplicationIngressConfig {
     std::uint16_t replication_channel = 2;
     bool require_initial_handshake = false;
     bool reject_unknown_channels = false;
-    std::size_t max_frames_per_ingest = std::numeric_limits<std::size_t>::max();
+    std::size_t max_frames_per_ingest = (std::numeric_limits<std::size_t>::max)();
 };
 
 struct ReplicationIngressOutcome {

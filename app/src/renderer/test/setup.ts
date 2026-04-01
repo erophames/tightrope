@@ -187,6 +187,7 @@ Object.defineProperty(window, 'tightrope', {
     removePeer: async () => {},
     triggerSync: async () => {},
     rollbackSyncBatch: async () => {},
+    onSyncEvent: () => () => {},
     windowMinimize: async () => {},
     windowToggleMaximize: async () => {},
     windowClose: async () => {},

@@ -4,6 +4,10 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(WIN32)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # vcpkg integrates via CMAKE_TOOLCHAIN_FILE (set by cmake-js or CLI)
 
 set(TIGHTROPE_NODE_INCLUDE_DIRS "")

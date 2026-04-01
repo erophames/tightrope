@@ -2,6 +2,8 @@ import { AccountsPage } from './components/accounts/AccountsPage';
 import { AddAccountDialog } from './components/dialogs/AddAccountDialog';
 import { AuthDialog } from './components/dialogs/AuthDialog';
 import { BackendDialog } from './components/dialogs/BackendDialog';
+import { SyncTopologyDialog } from './components/dialogs/SyncTopologyDialog';
+import { useSyncTopology } from './state/useSyncTopology';
 import { RouterToolbar } from './components/layout/RouterToolbar';
 import { NavRail } from './components/layout/NavRail';
 import { StatusBar } from './components/layout/StatusBar';
@@ -16,6 +18,7 @@ import { useTightropeState } from './state/useTightropeState';
 export function App() {
   const model = useTightropeState();
   const eligibleCount = Array.from(model.metrics.values()).filter((metric) => metric.capability).length;
+  const syncTopology = useSyncTopology(model.state.syncTopologyDialogOpen);
 
   return (
     <main className="window" aria-label="tightrope routing workbench">
@@ -166,6 +169,7 @@ export function App() {
             onSetSyncPeerProbeFailClosed={model.setSyncPeerProbeFailClosed}
             onSetSyncPeerProbeFailClosedFailures={model.setSyncPeerProbeFailClosedFailures}
             onTriggerSyncNow={model.triggerSyncNow}
+            onOpenSyncTopology={model.openSyncTopologyDialog}
             onSetTheme={model.setTheme}
           />
         </section>
@@ -194,6 +198,12 @@ export function App() {
         onToggleListener={model.toggleListener}
         onRestartListener={model.restartListener}
         onCapture={model.captureAuthResponse}
+      />
+
+      <SyncTopologyDialog
+        open={model.state.syncTopologyDialogOpen}
+        status={syncTopology.status}
+        onClose={model.closeSyncTopologyDialog}
       />
 
       <AddAccountDialog

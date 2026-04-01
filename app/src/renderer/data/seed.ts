@@ -294,6 +294,7 @@ export function createInitialRuntimeState(): AppRuntimeState {
     addAccountError: 'Something went wrong.',
     backendDialogOpen: false,
     authDialogOpen: false,
+    syncTopologyDialogOpen: false,
     drawerRowId: null,
     theme: 'auto',
   };

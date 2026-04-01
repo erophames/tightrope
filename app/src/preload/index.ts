@@ -161,6 +161,17 @@ contextBridge.exposeInMainWorld('tightrope', {
   },
   triggerSync: () => ipcRenderer.invoke('sync:trigger'),
   rollbackSyncBatch: (batchId: string) => ipcRenderer.invoke('sync:rollback-batch', batchId),
+  onSyncEvent: (listener: (event: unknown) => void) => {
+    const handler = (_event: unknown, payload: unknown) => {
+      if (payload && typeof payload === 'object' && typeof (payload as { type?: unknown }).type === 'string') {
+        listener(payload);
+      }
+    };
+    ipcRenderer.on('sync:event', handler);
+    return () => {
+      ipcRenderer.removeListener('sync:event', handler);
+    };
+  },
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowToggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
   windowClose: () => ipcRenderer.invoke('window:close'),

@@ -4,6 +4,7 @@
 
 #include "checksum.h"
 #include "journal_batch_id.h"
+#include "sync_event_emitter.h"
 
 namespace tightrope::sync {
 
@@ -22,6 +23,11 @@ JournalEntry Journal::append(const PendingJournalEntry& entry) {
         .batch_id = batch_id,
     };
     entries_.push_back(created);
+    SyncEventEmitter::get().emit(SyncEventJournalEntry{
+        .seq = created.seq,
+        .table = created.table_name,
+        .op = created.op,
+    });
     return created;
 }
 

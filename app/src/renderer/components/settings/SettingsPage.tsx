@@ -68,6 +68,7 @@ interface SettingsPageProps {
   onSetSyncPeerProbeFailClosed: (enabled: boolean) => void;
   onSetSyncPeerProbeFailClosedFailures: (value: number) => void;
   onTriggerSyncNow: () => void;
+  onOpenSyncTopology: () => void;
   onSetTheme: (theme: ThemeMode) => void;
 }
 
@@ -124,6 +125,7 @@ export function SettingsPage({
   onSetSyncPeerProbeFailClosed,
   onSetSyncPeerProbeFailClosedFailures,
   onTriggerSyncNow,
+  onOpenSyncTopology,
   onSetTheme,
 }: SettingsPageProps) {
   if (!visible) return null;
@@ -224,6 +226,7 @@ export function SettingsPage({
             onSetSyncPeerProbeFailClosed={onSetSyncPeerProbeFailClosed}
             onSetSyncPeerProbeFailClosedFailures={onSetSyncPeerProbeFailClosedFailures}
             onTriggerSyncNow={onTriggerSyncNow}
+            onOpenSyncTopology={onOpenSyncTopology}
           />
           <AppearanceSection theme={theme} onSetTheme={onSetTheme} />
         </div>

@@ -5,6 +5,7 @@
 
 #include "text/json_escape.h"
 #include "consensus/logging.h"
+#include "sync_event_emitter.h"
 
 namespace tightrope::sync::consensus {
 
@@ -205,6 +206,8 @@ std::size_t RaftNode::committed_entries() const {
 }
 
 void RaftNode::refresh_state_cache() const {
+    const auto prev_term = state_.current_term;
+    const auto prev_role = state_.role;
     state_ = {};
     if (backend_ == nullptr || !backend_->is_running()) {
         return;
@@ -228,6 +231,22 @@ void RaftNode::refresh_state_cache() const {
     if (state_.role == RaftRole::Leader) {
         state_.match_index[node_id_] = backend_->last_log_index();
         state_.next_index[node_id_] = backend_->last_log_index() + 1;
+    }
+
+    if (state_.current_term != prev_term) {
+        SyncEventEmitter::get().emit(SyncEventTermChange{
+            .term = state_.current_term,
+        });
+    }
+    if (state_.role != prev_role) {
+        const char* role_str = state_.role == RaftRole::Leader ? "leader"
+                             : state_.role == RaftRole::Candidate ? "candidate"
+                             : "follower";
+        SyncEventEmitter::get().emit(SyncEventRoleChange{
+            .role = role_str,
+            .term = state_.current_term,
+            .leader_id = state_.leader_id > 0 ? std::to_string(state_.leader_id) : std::string{},
+        });
     }
 }
 

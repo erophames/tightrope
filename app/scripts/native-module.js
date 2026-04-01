@@ -198,7 +198,7 @@ function runBuild() {
     (fs.existsSync(defaultToolchainPath) ? '../vcpkg/scripts/buildsystems/vcpkg.cmake' : null);
 
   const cmakeArgs = [
-    'rebuild',
+    'build',
     '-d',
     '..',
     '-r',

@@ -57,6 +57,7 @@ interface DatabaseSyncSectionProps {
   onSetSyncPeerProbeFailClosed: (enabled: boolean) => void;
   onSetSyncPeerProbeFailClosedFailures: (value: number) => void;
   onTriggerSyncNow: () => void;
+  onOpenSyncTopology: () => void;
 }
 
 function formatLastSync(lastSyncAt: number | null): string {
@@ -126,6 +127,7 @@ export function DatabaseSyncSection({
   onSetSyncPeerProbeFailClosed,
   onSetSyncPeerProbeFailClosedFailures,
   onTriggerSyncNow,
+  onOpenSyncTopology,
 }: DatabaseSyncSectionProps) {
   const peers = clusterStatus.peers ?? [];
   const connectedPeers = peers.filter((peer) => peer.state === 'connected').length;
@@ -632,7 +634,10 @@ export function DatabaseSyncSection({
               <span style={{ color: 'var(--warn)' }}>last socket error: {clusterStatus.ingress_socket_last_failure_error}</span>
             ) : null}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+            <button className="btn-secondary" type="button" onClick={onOpenSyncTopology}>
+              View topology
+            </button>
             <button className="btn-secondary" type="button" onClick={onTriggerSyncNow}>
               Trigger sync now
             </button>

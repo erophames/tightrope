@@ -2246,6 +2246,14 @@ export function useTightropeState() {
     setState((previous) => ({ ...previous, authDialogOpen: false }));
   }
 
+  function openSyncTopologyDialog(): void {
+    setState((previous) => ({ ...previous, syncTopologyDialogOpen: true }));
+  }
+
+  function closeSyncTopologyDialog(): void {
+    setState((previous) => ({ ...previous, syncTopologyDialogOpen: false }));
+  }
+
   function openAddAccountDialog(): void {
     stopBrowserOauthPolling();
     selectedImportFileRef.current = null;
@@ -2698,6 +2706,8 @@ export function useTightropeState() {
     closeBackendDialog,
     openAuthDialog,
     closeAuthDialog,
+    openSyncTopologyDialog,
+    closeSyncTopologyDialog,
     openAddAccountDialog,
     closeAddAccountDialog,
     setAddAccountStep,

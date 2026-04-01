@@ -22,6 +22,7 @@
 #include "discovery/peer_endpoint.h"
 #include "oauth/callback_server.h"
 #include "sync_engine.h"
+#include "sync_event_emitter.h"
 #include "transport/peer_probe.h"
 #include "transport/tls_stream.h"
 #include "text/ascii.h"
@@ -1343,6 +1344,19 @@ void Bridge::refresh_cluster_peers(ClusterStatus& status) noexcept {
             eviction_candidates.push_back(peer.site_id);
         }
 
+        const auto prev_state_it = cluster_->prev_peer_states.find(peer.site_id);
+        if (prev_state_it == cluster_->prev_peer_states.end() || prev_state_it->second != item.state) {
+            const char* peer_state_str = item.state == PeerState::Connected   ? "connected"
+                                       : item.state == PeerState::Unreachable ? "unreachable"
+                                       : "disconnected";
+            tightrope::sync::SyncEventEmitter::get().emit(tightrope::sync::SyncEventPeerStateChange{
+                .site_id = item.site_id,
+                .state   = peer_state_str,
+                .address = item.address,
+            });
+            cluster_->prev_peer_states[peer.site_id] = item.state;
+        }
+
         status.peers.push_back(std::move(item));
     }
 
@@ -1455,6 +1469,13 @@ void Bridge::refresh_cluster_peers(ClusterStatus& status) noexcept {
         const bool next_alert_active = cluster_->replication_lag_alert_streak >= lag_policy.sustained_refreshes;
         if (!cluster_->replication_lag_alert_active && next_alert_active) {
             cluster_->replication_lag_last_alert_at = now_ms;
+        }
+        if (cluster_->replication_lag_alert_active != next_alert_active) {
+            tightrope::sync::SyncEventEmitter::get().emit(tightrope::sync::SyncEventLagAlert{
+                .active        = next_alert_active,
+                .lagging_peers = static_cast<std::uint32_t>(lagging_peers),
+                .max_lag       = lag_max_entries,
+            });
         }
         cluster_->replication_lag_alert_active = next_alert_active;
     }

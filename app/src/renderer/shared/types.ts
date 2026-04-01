@@ -121,6 +121,15 @@ export interface RouteMetrics {
   score: number;
 }
 
+export type SyncEvent =
+  | { type: 'journal_entry'; ts: number; seq: number; table: string; op: string }
+  | { type: 'peer_state_change'; ts: number; site_id: string; state: ClusterPeerState; address: string }
+  | { type: 'role_change'; ts: number; role: Exclude<ClusterRole, 'standalone'>; term: number; leader_id: string | null }
+  | { type: 'commit_advance'; ts: number; commit_index: number; last_applied: number }
+  | { type: 'term_change'; ts: number; term: number }
+  | { type: 'ingress_batch'; ts: number; site_id: string; accepted: boolean; bytes: number; apply_duration_ms: number; replication_latency_ms: number }
+  | { type: 'lag_alert'; ts: number; active: boolean; lagging_peers: number; max_lag: number };
+
 export interface AppRuntimeState {
   currentPage: AppPage;
   selectedAccountId: string;
@@ -154,6 +163,7 @@ export interface AppRuntimeState {
   addAccountError: string;
   backendDialogOpen: boolean;
   authDialogOpen: boolean;
+  syncTopologyDialogOpen: boolean;
   drawerRowId: string | null;
   theme: ThemeMode;
 }
@@ -480,6 +490,7 @@ export interface ElectronApi {
   removePeer: (siteId: string) => Promise<void>;
   triggerSync: () => Promise<void>;
   rollbackSyncBatch: (batchId: string) => Promise<void>;
+  onSyncEvent: (listener: (event: SyncEvent) => void) => () => void;
   windowMinimize: () => Promise<void>;
   windowToggleMaximize: () => Promise<void>;
   windowClose: () => Promise<void>;

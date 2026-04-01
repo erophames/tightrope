@@ -2,6 +2,8 @@
 
 #include <exception>
 
+#include "sync_event_emitter.h"
+
 namespace tightrope::sync::consensus::nuraft_backend::internal {
 
 void NoopLogger::put_details(
@@ -44,6 +46,10 @@ nuraft::ptr<nuraft::buffer> InMemoryStateMachine::commit(const nuraft::ulong log
     std::lock_guard<std::mutex> lock(mutex_);
     committed_payloads_.emplace_back(reinterpret_cast<const char*>(bytes), size);
     commit_index_.store(log_idx);
+    SyncEventEmitter::get().emit(SyncEventCommitAdvance{
+        .commit_index = static_cast<std::uint64_t>(log_idx),
+        .last_applied = static_cast<std::uint64_t>(log_idx),
+    });
     return nullptr;
 }
 

@@ -1,5 +1,14 @@
 // Typed wrapper around the tightrope-core.node N-API native module
 
+export type SyncEvent =
+  | { type: 'journal_entry'; ts: number; seq: number; table: string; op: string }
+  | { type: 'peer_state_change'; ts: number; site_id: string; state: 'connected' | 'disconnected' | 'unreachable'; address: string }
+  | { type: 'role_change'; ts: number; role: 'leader' | 'follower' | 'candidate'; term: number; leader_id: string | null }
+  | { type: 'commit_advance'; ts: number; commit_index: number; last_applied: number }
+  | { type: 'term_change'; ts: number; term: number }
+  | { type: 'ingress_batch'; ts: number; site_id: string; accepted: boolean; bytes: number; apply_duration_ms: number; replication_latency_ms: number }
+  | { type: 'lag_alert'; ts: number; active: boolean; lagging_peers: number; max_lag: number };
+
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -167,6 +176,10 @@ interface NativeModule {
   // Sync
   syncTriggerNow(): Promise<void>;
   syncRollbackBatch(batchId: string): Promise<void>;
+
+  // Sync events
+  registerSyncEventCallback(fn: (event: SyncEvent) => void): void;
+  unregisterSyncEventCallback(): void;
 }
 
 function nativeModuleCandidates(): string[] {
@@ -252,6 +265,8 @@ function createNativeStubs(): NativeModule {
     async clusterRemovePeer() {},
     async syncTriggerNow() {},
     async syncRollbackBatch() {},
+    registerSyncEventCallback() {},
+    unregisterSyncEventCallback() {},
   };
 }
 

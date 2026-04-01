@@ -236,6 +236,11 @@ app.whenReady().then(async () => {
     },
   });
 
+  native.registerSyncEventCallback((event) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('sync:event', event);
+  });
+
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
   try {
     await loadRenderer(mainWindow, devServerUrl);

@@ -214,6 +214,7 @@ class Bridge {
         std::uint64_t replication_lag_alert_streak = 0;
         bool replication_lag_alert_active = false;
         std::optional<std::uint64_t> replication_lag_last_alert_at;
+        std::unordered_map<std::uint32_t, PeerState> prev_peer_states;
     };
 
     void refresh_cluster_peers(ClusterStatus& status) noexcept;
