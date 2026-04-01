@@ -1,10 +1,11 @@
 #include "account_traffic.h"
 
 #include <algorithm>
-#include <chrono>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
+
+#include "time/clock.h"
 
 namespace tightrope::proxy {
 
@@ -25,9 +26,13 @@ AccountTrafficUpdateCallback& update_callback() {
     return *value;
 }
 
+core::time::Clock& runtime_clock() {
+    static core::time::SystemClock clock;
+    return clock;
+}
+
 std::int64_t now_ms() {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return runtime_clock().unix_ms_now();
 }
 
 void record_traffic(std::string_view account_id, std::size_t bytes, bool egress) {

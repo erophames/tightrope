@@ -35,6 +35,7 @@ interface SettingsPageProps {
   onSetStickyThreadsEnabled: (enabled: boolean) => void;
   onSetPreferEarlierResetAccounts: (enabled: boolean) => void;
   onSetOpenaiCacheAffinityMaxAgeSeconds: (seconds: number) => void;
+  onSetRoutingPlanModelPricingUsdPerMillion: (value: string) => void;
   onSetFirewallDraftIpAddress: (value: string) => void;
   onAddFirewallIpAddress: () => void;
   onRemoveFirewallIpAddress: (ipAddress: string) => void;
@@ -50,6 +51,22 @@ interface SettingsPageProps {
   onSetSyncConflictResolution: (strategy: SyncConflictResolution) => void;
   onSetSyncJournalRetentionDays: (days: number) => void;
   onSetSyncTlsEnabled: (enabled: boolean) => void;
+  onSetSyncRequireHandshakeAuth: (enabled: boolean) => void;
+  onSetSyncClusterSharedSecret: (secret: string) => void;
+  onSetSyncTlsVerifyPeer: (enabled: boolean) => void;
+  onSetSyncTlsCaCertificatePath: (path: string) => void;
+  onSetSyncTlsCertificateChainPath: (path: string) => void;
+  onSetSyncTlsPrivateKeyPath: (path: string) => void;
+  onSetSyncTlsPinnedPeerCertificateSha256: (value: string) => void;
+  onSetSyncSchemaVersion: (version: number) => void;
+  onSetSyncMinSupportedSchemaVersion: (version: number) => void;
+  onSetSyncAllowSchemaDowngrade: (enabled: boolean) => void;
+  onSetSyncPeerProbeEnabled: (enabled: boolean) => void;
+  onSetSyncPeerProbeIntervalMs: (value: number) => void;
+  onSetSyncPeerProbeTimeoutMs: (value: number) => void;
+  onSetSyncPeerProbeMaxPerRefresh: (value: number) => void;
+  onSetSyncPeerProbeFailClosed: (enabled: boolean) => void;
+  onSetSyncPeerProbeFailClosedFailures: (value: number) => void;
   onTriggerSyncNow: () => void;
   onSetTheme: (theme: ThemeMode) => void;
 }
@@ -74,6 +91,7 @@ export function SettingsPage({
   onSetStickyThreadsEnabled,
   onSetPreferEarlierResetAccounts,
   onSetOpenaiCacheAffinityMaxAgeSeconds,
+  onSetRoutingPlanModelPricingUsdPerMillion,
   onSetFirewallDraftIpAddress,
   onAddFirewallIpAddress,
   onRemoveFirewallIpAddress,
@@ -89,6 +107,22 @@ export function SettingsPage({
   onSetSyncConflictResolution,
   onSetSyncJournalRetentionDays,
   onSetSyncTlsEnabled,
+  onSetSyncRequireHandshakeAuth,
+  onSetSyncClusterSharedSecret,
+  onSetSyncTlsVerifyPeer,
+  onSetSyncTlsCaCertificatePath,
+  onSetSyncTlsCertificateChainPath,
+  onSetSyncTlsPrivateKeyPath,
+  onSetSyncTlsPinnedPeerCertificateSha256,
+  onSetSyncSchemaVersion,
+  onSetSyncMinSupportedSchemaVersion,
+  onSetSyncAllowSchemaDowngrade,
+  onSetSyncPeerProbeEnabled,
+  onSetSyncPeerProbeIntervalMs,
+  onSetSyncPeerProbeTimeoutMs,
+  onSetSyncPeerProbeMaxPerRefresh,
+  onSetSyncPeerProbeFailClosed,
+  onSetSyncPeerProbeFailClosedFailures,
   onTriggerSyncNow,
   onSetTheme,
 }: SettingsPageProps) {
@@ -118,10 +152,12 @@ export function SettingsPage({
             stickyThreadsEnabled={dashboardSettings.stickyThreadsEnabled}
             preferEarlierResetAccounts={dashboardSettings.preferEarlierResetAccounts}
             openaiCacheAffinityMaxAgeSeconds={dashboardSettings.openaiCacheAffinityMaxAgeSeconds}
+            routingPlanModelPricingUsdPerMillion={dashboardSettings.routingPlanModelPricingUsdPerMillion}
             onSetUpstreamStreamTransport={onSetUpstreamStreamTransport}
             onSetStickyThreadsEnabled={onSetStickyThreadsEnabled}
             onSetPreferEarlierResetAccounts={onSetPreferEarlierResetAccounts}
             onSetOpenaiCacheAffinityMaxAgeSeconds={onSetOpenaiCacheAffinityMaxAgeSeconds}
+            onSetRoutingPlanModelPricingUsdPerMillion={onSetRoutingPlanModelPricingUsdPerMillion}
           />
           <FirewallSection
             mode={firewallMode}
@@ -142,6 +178,22 @@ export function SettingsPage({
             syncConflictResolution={dashboardSettings.syncConflictResolution}
             syncJournalRetentionDays={dashboardSettings.syncJournalRetentionDays}
             syncTlsEnabled={dashboardSettings.syncTlsEnabled}
+            syncRequireHandshakeAuth={dashboardSettings.syncRequireHandshakeAuth}
+            syncClusterSharedSecret={dashboardSettings.syncClusterSharedSecret}
+            syncTlsVerifyPeer={dashboardSettings.syncTlsVerifyPeer}
+            syncTlsCaCertificatePath={dashboardSettings.syncTlsCaCertificatePath}
+            syncTlsCertificateChainPath={dashboardSettings.syncTlsCertificateChainPath}
+            syncTlsPrivateKeyPath={dashboardSettings.syncTlsPrivateKeyPath}
+            syncTlsPinnedPeerCertificateSha256={dashboardSettings.syncTlsPinnedPeerCertificateSha256}
+            syncSchemaVersion={dashboardSettings.syncSchemaVersion}
+            syncMinSupportedSchemaVersion={dashboardSettings.syncMinSupportedSchemaVersion}
+            syncAllowSchemaDowngrade={dashboardSettings.syncAllowSchemaDowngrade}
+            syncPeerProbeEnabled={dashboardSettings.syncPeerProbeEnabled}
+            syncPeerProbeIntervalMs={dashboardSettings.syncPeerProbeIntervalMs}
+            syncPeerProbeTimeoutMs={dashboardSettings.syncPeerProbeTimeoutMs}
+            syncPeerProbeMaxPerRefresh={dashboardSettings.syncPeerProbeMaxPerRefresh}
+            syncPeerProbeFailClosed={dashboardSettings.syncPeerProbeFailClosed}
+            syncPeerProbeFailClosedFailures={dashboardSettings.syncPeerProbeFailClosedFailures}
             clusterStatus={clusterStatus}
             onToggleSyncEnabled={onToggleSyncEnabled}
             onSetSyncSiteId={onSetSyncSiteId}
@@ -155,6 +207,22 @@ export function SettingsPage({
             onSetSyncConflictResolution={onSetSyncConflictResolution}
             onSetSyncJournalRetentionDays={onSetSyncJournalRetentionDays}
             onSetSyncTlsEnabled={onSetSyncTlsEnabled}
+            onSetSyncRequireHandshakeAuth={onSetSyncRequireHandshakeAuth}
+            onSetSyncClusterSharedSecret={onSetSyncClusterSharedSecret}
+            onSetSyncTlsVerifyPeer={onSetSyncTlsVerifyPeer}
+            onSetSyncTlsCaCertificatePath={onSetSyncTlsCaCertificatePath}
+            onSetSyncTlsCertificateChainPath={onSetSyncTlsCertificateChainPath}
+            onSetSyncTlsPrivateKeyPath={onSetSyncTlsPrivateKeyPath}
+            onSetSyncTlsPinnedPeerCertificateSha256={onSetSyncTlsPinnedPeerCertificateSha256}
+            onSetSyncSchemaVersion={onSetSyncSchemaVersion}
+            onSetSyncMinSupportedSchemaVersion={onSetSyncMinSupportedSchemaVersion}
+            onSetSyncAllowSchemaDowngrade={onSetSyncAllowSchemaDowngrade}
+            onSetSyncPeerProbeEnabled={onSetSyncPeerProbeEnabled}
+            onSetSyncPeerProbeIntervalMs={onSetSyncPeerProbeIntervalMs}
+            onSetSyncPeerProbeTimeoutMs={onSetSyncPeerProbeTimeoutMs}
+            onSetSyncPeerProbeMaxPerRefresh={onSetSyncPeerProbeMaxPerRefresh}
+            onSetSyncPeerProbeFailClosed={onSetSyncPeerProbeFailClosed}
+            onSetSyncPeerProbeFailClosedFailures={onSetSyncPeerProbeFailClosedFailures}
             onTriggerSyncNow={onTriggerSyncNow}
           />
           <AppearanceSection theme={theme} onSetTheme={onSetTheme} />

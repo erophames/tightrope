@@ -1,12 +1,22 @@
 #include "discovery/peer_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <utility>
 
 #include "sync_logging.h"
 
 namespace tightrope::sync::discovery {
+
+namespace {
+
+std::uint64_t now_unix_ms() {
+    const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+    return static_cast<std::uint64_t>(now.time_since_epoch().count());
+}
+
+} // namespace
 
 PeerManager::PeerManager(std::string cluster_name)
     : cluster_name_(std::move(cluster_name)), browser_(cluster_name_) {
@@ -30,7 +40,7 @@ bool PeerManager::add_manual_peer(const std::uint32_t site_id, const PeerEndpoin
         .site_id = site_id,
         .endpoint = endpoint,
         .manual = true,
-        .seen_unix_ms = 0,
+        .seen_unix_ms = now_unix_ms(),
     };
     log_discovery_event(
         SyncLogLevel::Debug,

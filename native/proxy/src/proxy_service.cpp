@@ -174,6 +174,22 @@ std::size_t upstream_payload_bytes(const UpstreamExecutionResult& upstream) {
     return bytes;
 }
 
+bool handle_deactivated_401_if_present(const UpstreamExecutionResult& upstream, const std::string_view account_id) {
+    if (account_id.empty() || !internal::upstream_401_body_indicates_deactivated_account(upstream)) {
+        return false;
+    }
+
+    const bool updated = session::mark_upstream_account_unusable(account_id);
+    core::logging::log_event(
+        updated ? core::logging::LogLevel::Info : core::logging::LogLevel::Warning,
+        "runtime",
+        "proxy",
+        "upstream_account_marked_unusable",
+        "account_id=" + std::string(account_id) + " reason=deactivated_401 updated=" + (updated ? "true" : "false")
+    );
+    return true;
+}
+
 } // namespace
 
 ProxyJsonResult collect_responses_json(
@@ -211,7 +227,9 @@ ProxyJsonResult collect_responses_json(
     std::string access_token;
     std::string traffic_account_id;
     auto resolved_affinity = affinity;
-    if (const auto credentials = session::resolve_upstream_account_credentials(affinity.account_id); credentials.has_value()) {
+    if (const auto credentials =
+            session::resolve_upstream_account_credentials(affinity.account_id, affinity.request_model);
+        credentials.has_value()) {
         resolved_affinity.account_id = credentials->account_id;
         access_token = credentials->access_token;
         if (credentials->internal_account_id > 0) {
@@ -259,29 +277,32 @@ ProxyJsonResult collect_responses_json(
 
     auto upstream = execute_upstream(plan);
     if (upstream.status == 401 && !resolved_affinity.account_id.empty()) {
-        if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
-            refreshed.has_value()) {
-            resolved_affinity.account_id = refreshed->account_id;
-            access_token = refreshed->access_token;
-            if (refreshed->internal_account_id > 0) {
-                traffic_account_id = std::to_string(refreshed->internal_account_id);
-            }
-            try {
-                plan = openai::build_responses_http_request_plan(
-                    bridged_request_body,
-                    bridged_headers,
-                    access_token,
-                    resolved_affinity.account_id,
-                    ""
-                );
-                upstream = execute_upstream(plan);
-            } catch (const std::exception&) {
-                core::logging::log_event(
-                    core::logging::LogLevel::Warning,
-                    "runtime",
-                    "proxy",
-                    "responses_refresh_rebuild_failed"
-                );
+        if (!handle_deactivated_401_if_present(upstream, resolved_affinity.account_id)) {
+            if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
+                refreshed.has_value()) {
+                resolved_affinity.account_id = refreshed->account_id;
+                access_token = refreshed->access_token;
+                if (refreshed->internal_account_id > 0) {
+                    traffic_account_id = std::to_string(refreshed->internal_account_id);
+                }
+                try {
+                    plan = openai::build_responses_http_request_plan(
+                        bridged_request_body,
+                        bridged_headers,
+                        access_token,
+                        resolved_affinity.account_id,
+                        ""
+                    );
+                    upstream = execute_upstream(plan);
+                    (void)handle_deactivated_401_if_present(upstream, resolved_affinity.account_id);
+                } catch (const std::exception&) {
+                    core::logging::log_event(
+                        core::logging::LogLevel::Warning,
+                        "runtime",
+                        "proxy",
+                        "responses_refresh_rebuild_failed"
+                    );
+                }
             }
         }
     }
@@ -396,7 +417,9 @@ ProxyJsonResult collect_responses_compact(
     std::string access_token;
     std::string traffic_account_id;
     auto resolved_affinity = affinity;
-    if (const auto credentials = session::resolve_upstream_account_credentials(affinity.account_id); credentials.has_value()) {
+    if (const auto credentials =
+            session::resolve_upstream_account_credentials(affinity.account_id, affinity.request_model);
+        credentials.has_value()) {
         resolved_affinity.account_id = credentials->account_id;
         access_token = credentials->access_token;
         if (credentials->internal_account_id > 0) {
@@ -444,29 +467,32 @@ ProxyJsonResult collect_responses_compact(
 
     auto upstream = execute_upstream(plan);
     if (upstream.status == 401 && !resolved_affinity.account_id.empty()) {
-        if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
-            refreshed.has_value()) {
-            resolved_affinity.account_id = refreshed->account_id;
-            access_token = refreshed->access_token;
-            if (refreshed->internal_account_id > 0) {
-                traffic_account_id = std::to_string(refreshed->internal_account_id);
-            }
-            try {
-                plan = openai::build_compact_http_request_plan(
-                    raw_request_body,
-                    inbound_headers,
-                    access_token,
-                    resolved_affinity.account_id,
-                    ""
-                );
-                upstream = execute_upstream(plan);
-            } catch (const std::exception&) {
-                core::logging::log_event(
-                    core::logging::LogLevel::Warning,
-                    "runtime",
-                    "proxy",
-                    "compact_refresh_rebuild_failed"
-                );
+        if (!handle_deactivated_401_if_present(upstream, resolved_affinity.account_id)) {
+            if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
+                refreshed.has_value()) {
+                resolved_affinity.account_id = refreshed->account_id;
+                access_token = refreshed->access_token;
+                if (refreshed->internal_account_id > 0) {
+                    traffic_account_id = std::to_string(refreshed->internal_account_id);
+                }
+                try {
+                    plan = openai::build_compact_http_request_plan(
+                        raw_request_body,
+                        inbound_headers,
+                        access_token,
+                        resolved_affinity.account_id,
+                        ""
+                    );
+                    upstream = execute_upstream(plan);
+                    (void)handle_deactivated_401_if_present(upstream, resolved_affinity.account_id);
+                } catch (const std::exception&) {
+                    core::logging::log_event(
+                        core::logging::LogLevel::Warning,
+                        "runtime",
+                        "proxy",
+                        "compact_refresh_rebuild_failed"
+                    );
+                }
             }
         }
     }
@@ -538,7 +564,8 @@ ProxyJsonResult collect_models(
     auto model_headers = inbound_headers;
     const auto affinity = session::resolve_sticky_affinity("", inbound_headers);
     std::string usage_account_id = affinity.account_id;
-    if (const auto credentials = session::resolve_upstream_account_credentials(affinity.account_id); credentials.has_value()) {
+    if (const auto credentials = session::resolve_upstream_account_credentials(affinity.account_id, "");
+        credentials.has_value()) {
         model_headers["authorization"] = "Bearer " + credentials->access_token;
         model_headers["chatgpt-account-id"] = credentials->account_id;
         usage_account_id = credentials->account_id;
@@ -615,7 +642,8 @@ ProxyJsonResult collect_transcribe(
     std::string access_token;
     std::string account_id = affinity.account_id;
     std::string traffic_account_id;
-    if (const auto credentials = session::resolve_upstream_account_credentials(account_id); credentials.has_value()) {
+    if (const auto credentials = session::resolve_upstream_account_credentials(account_id, model);
+        credentials.has_value()) {
         account_id = credentials->account_id;
         access_token = credentials->access_token;
         if (credentials->internal_account_id > 0) {
@@ -651,22 +679,25 @@ ProxyJsonResult collect_transcribe(
 
     auto upstream = execute_upstream(plan);
     if (upstream.status == 401 && !account_id.empty()) {
-        if (const auto refreshed = session::refresh_upstream_account_credentials(account_id); refreshed.has_value()) {
-            account_id = refreshed->account_id;
-            access_token = refreshed->access_token;
-            if (refreshed->internal_account_id > 0) {
-                traffic_account_id = std::to_string(refreshed->internal_account_id);
+        if (!handle_deactivated_401_if_present(upstream, account_id)) {
+            if (const auto refreshed = session::refresh_upstream_account_credentials(account_id); refreshed.has_value()) {
+                account_id = refreshed->account_id;
+                access_token = refreshed->access_token;
+                if (refreshed->internal_account_id > 0) {
+                    traffic_account_id = std::to_string(refreshed->internal_account_id);
+                }
+                const auto refreshed_plan = openai::build_transcribe_http_request_plan(
+                    prompt,
+                    "audio.wav",
+                    "application/octet-stream",
+                    audio_bytes,
+                    inbound_headers,
+                    access_token,
+                    account_id
+                );
+                upstream = execute_upstream(refreshed_plan);
+                (void)handle_deactivated_401_if_present(upstream, account_id);
             }
-            const auto refreshed_plan = openai::build_transcribe_http_request_plan(
-                prompt,
-                "audio.wav",
-                "application/octet-stream",
-                audio_bytes,
-                inbound_headers,
-                access_token,
-                account_id
-            );
-            upstream = execute_upstream(refreshed_plan);
         }
     }
     core::logging::log_event(
@@ -736,7 +767,9 @@ ProxySseResult stream_responses_sse(
     std::string access_token;
     std::string traffic_account_id;
     auto resolved_affinity = affinity;
-    if (const auto credentials = session::resolve_upstream_account_credentials(affinity.account_id); credentials.has_value()) {
+    if (const auto credentials =
+            session::resolve_upstream_account_credentials(affinity.account_id, affinity.request_model);
+        credentials.has_value()) {
         resolved_affinity.account_id = credentials->account_id;
         access_token = credentials->access_token;
         if (credentials->internal_account_id > 0) {
@@ -789,35 +822,38 @@ ProxySseResult stream_responses_sse(
 
     auto upstream = execute_upstream(plan);
     if (upstream.status == 401 && !resolved_affinity.account_id.empty()) {
-        if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
-            refreshed.has_value()) {
-            resolved_affinity.account_id = refreshed->account_id;
-            access_token = refreshed->access_token;
-            if (refreshed->internal_account_id > 0) {
-                traffic_account_id = std::to_string(refreshed->internal_account_id);
-            }
-            try {
-                const auto registry = openai::build_default_model_registry();
-                plan = openai::build_responses_stream_request_plan(
-                    bridged_request_body,
-                    inbound_headers,
-                    access_token,
-                    resolved_affinity.account_id,
-                    registry,
-                    "default"
-                );
-                const auto turn_state_it = bridged_headers.find("x-codex-turn-state");
-                if (turn_state_it != bridged_headers.end() && !turn_state_it->second.empty()) {
-                    plan.headers["x-codex-turn-state"] = turn_state_it->second;
+        if (!handle_deactivated_401_if_present(upstream, resolved_affinity.account_id)) {
+            if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
+                refreshed.has_value()) {
+                resolved_affinity.account_id = refreshed->account_id;
+                access_token = refreshed->access_token;
+                if (refreshed->internal_account_id > 0) {
+                    traffic_account_id = std::to_string(refreshed->internal_account_id);
                 }
-                upstream = execute_upstream(plan);
-            } catch (const std::exception&) {
-                core::logging::log_event(
-                    core::logging::LogLevel::Warning,
-                    "runtime",
-                    "proxy",
-                    "responses_sse_refresh_rebuild_failed"
-                );
+                try {
+                    const auto registry = openai::build_default_model_registry();
+                    plan = openai::build_responses_stream_request_plan(
+                        bridged_request_body,
+                        inbound_headers,
+                        access_token,
+                        resolved_affinity.account_id,
+                        registry,
+                        "default"
+                    );
+                    const auto turn_state_it = bridged_headers.find("x-codex-turn-state");
+                    if (turn_state_it != bridged_headers.end() && !turn_state_it->second.empty()) {
+                        plan.headers["x-codex-turn-state"] = turn_state_it->second;
+                    }
+                    upstream = execute_upstream(plan);
+                    (void)handle_deactivated_401_if_present(upstream, resolved_affinity.account_id);
+                } catch (const std::exception&) {
+                    core::logging::log_event(
+                        core::logging::LogLevel::Warning,
+                        "runtime",
+                        "proxy",
+                        "responses_sse_refresh_rebuild_failed"
+                    );
+                }
             }
         }
     }

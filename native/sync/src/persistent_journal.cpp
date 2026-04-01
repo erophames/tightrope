@@ -1,8 +1,11 @@
 #include "persistent_journal.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cstdlib>
 #include <limits>
 #include <string>
+#include <utility>
 
 #include "checksum.h"
 #include "journal_batch_id.h"
@@ -11,6 +14,71 @@
 namespace tightrope::sync {
 
 namespace {
+
+struct AutoCompactConfig {
+    std::size_t min_entries = 10'000;
+    std::uint64_t check_interval_entries = 256;
+    std::uint64_t retention_ms = 300'000;
+    int min_applied_value = 2;
+    bool enabled = true;
+};
+
+std::optional<std::uint64_t> parse_env_u64(const char* name) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return std::nullopt;
+    }
+    std::uint64_t value = 0;
+    const auto* begin = raw;
+    const auto* end = raw + std::char_traits<char>::length(raw);
+    const auto parsed = std::from_chars(begin, end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+std::optional<int> parse_env_int(const char* name) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr || raw[0] == '\0') {
+        return std::nullopt;
+    }
+    int value = 0;
+    const auto* begin = raw;
+    const auto* end = raw + std::char_traits<char>::length(raw);
+    const auto parsed = std::from_chars(begin, end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+AutoCompactConfig load_auto_compact_config() {
+    AutoCompactConfig config;
+    if (const auto enabled = parse_env_u64("TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_ENABLED"); enabled.has_value()) {
+        config.enabled = *enabled != 0;
+    }
+    if (const auto min_entries = parse_env_u64("TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_MIN_ENTRIES"); min_entries.has_value()) {
+        config.min_entries = std::max<std::size_t>(static_cast<std::size_t>(*min_entries), static_cast<std::size_t>(1));
+    }
+    if (const auto interval = parse_env_u64("TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_INTERVAL"); interval.has_value()) {
+        config.check_interval_entries = std::max<std::uint64_t>(*interval, 1);
+    }
+    if (const auto retention = parse_env_u64("TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_RETENTION_MS"); retention.has_value()) {
+        config.retention_ms = *retention;
+    }
+    if (const auto min_applied = parse_env_int("TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_MIN_APPLIED"); min_applied.has_value()) {
+        config.min_applied_value = std::max(*min_applied, 0);
+    }
+    return config;
+}
+
+bool should_verify_checksum_on_read() {
+    if (const auto enabled = parse_env_u64("TIGHTROPE_SYNC_JOURNAL_VERIFY_CHECKSUM_ON_READ"); enabled.has_value()) {
+        return *enabled != 0;
+    }
+    return true;
+}
 
 std::string column_text(sqlite3_stmt* stmt, const int column) {
     const auto* text = sqlite3_column_text(stmt, column);
@@ -23,6 +91,39 @@ std::string sqlite_error(sqlite3* db) {
     }
     const char* text = sqlite3_errmsg(db);
     return text == nullptr ? std::string("sqlite error") : std::string(text);
+}
+
+bool exec_sql(sqlite3* db, const char* sql, std::string* error = nullptr) {
+    char* err = nullptr;
+    const int rc = sqlite3_exec(db, sql, nullptr, nullptr, &err);
+    if (rc == SQLITE_OK) {
+        return true;
+    }
+    if (error != nullptr) {
+        *error = err != nullptr ? std::string(err) : sqlite_error(db);
+    }
+    if (err != nullptr) {
+        sqlite3_free(err);
+    }
+    return false;
+}
+
+std::uint64_t max_acknowledged_seq(sqlite3* db, const int min_applied_value) {
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT COALESCE(MAX(seq), 0) FROM _sync_journal WHERE applied >= ?1;";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK || stmt == nullptr) {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+        }
+        return 0;
+    }
+    sqlite3_bind_int(stmt, 1, min_applied_value);
+    std::uint64_t value = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        value = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 0));
+    }
+    sqlite3_finalize(stmt);
+    return value;
 }
 
 JournalEntry read_entry(sqlite3_stmt* stmt) {
@@ -119,6 +220,26 @@ std::optional<JournalEntry> PersistentJournal::append(const PendingJournalEntry&
         "persistent_journal",
         "append_complete",
         "seq=" + std::to_string(created.seq) + " batch_id=" + created.batch_id);
+
+    const auto auto_compact = load_auto_compact_config();
+    if (auto_compact.enabled && auto_compact.check_interval_entries > 0 &&
+        (created.seq % auto_compact.check_interval_entries) == 0) {
+        const auto entry_count = size();
+        if (entry_count >= auto_compact.min_entries) {
+            const auto ack_seq = max_acknowledged_seq(db_, auto_compact.min_applied_value);
+            if (ack_seq > 0) {
+                const auto cutoff_wall =
+                    created.hlc.wall > auto_compact.retention_ms ? created.hlc.wall - auto_compact.retention_ms : 0;
+                const auto deleted = compact(cutoff_wall, ack_seq);
+                log_sync_event(
+                    SyncLogLevel::Debug,
+                    "persistent_journal",
+                    "auto_compact_complete",
+                    "deleted=" + std::to_string(deleted) + " size_before=" + std::to_string(entry_count) +
+                        " ack_seq=" + std::to_string(ack_seq) + " cutoff_wall=" + std::to_string(cutoff_wall));
+            }
+        }
+    }
     return created;
 }
 
@@ -157,9 +278,24 @@ std::vector<JournalEntry> PersistentJournal::entries_after(const std::uint64_t a
     sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(after_seq));
     const auto clamped_limit = std::min<std::size_t>(limit, static_cast<std::size_t>(std::numeric_limits<int>::max()));
     sqlite3_bind_int(stmt, 2, static_cast<int>(clamped_limit));
+    const bool verify_checksum = should_verify_checksum_on_read();
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        entries.push_back(read_entry(stmt));
+        auto entry = read_entry(stmt);
+        if (verify_checksum) {
+            const auto expected_checksum =
+                journal_checksum(entry.table_name, entry.row_pk, entry.op, entry.old_values, entry.new_values);
+            if (expected_checksum != entry.checksum) {
+                sqlite3_finalize(stmt);
+                log_sync_event(
+                    SyncLogLevel::Error,
+                    "persistent_journal",
+                    "entries_after_checksum_mismatch",
+                    "seq=" + std::to_string(entry.seq) + " expected=" + expected_checksum + " actual=" + entry.checksum);
+                return {};
+            }
+        }
+        entries.push_back(std::move(entry));
     }
     sqlite3_finalize(stmt);
     log_sync_event(
@@ -369,6 +505,22 @@ std::size_t PersistentJournal::compact(const std::uint64_t cutoff_wall, const st
     }
     sqlite3_finalize(stmt);
     const auto deleted = static_cast<std::size_t>(sqlite3_changes(db_));
+    if (deleted > 0) {
+        std::string vacuum_error;
+        if (!exec_sql(db_, "VACUUM;", &vacuum_error)) {
+            log_sync_event(
+                SyncLogLevel::Warning,
+                "persistent_journal",
+                "compact_vacuum_failed",
+                vacuum_error);
+        } else {
+            log_sync_event(
+                SyncLogLevel::Trace,
+                "persistent_journal",
+                "compact_vacuum_complete",
+                "deleted=" + std::to_string(deleted));
+        }
+    }
     log_sync_event(
         SyncLogLevel::Debug,
         "persistent_journal",

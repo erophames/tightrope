@@ -10,7 +10,9 @@ namespace tightrope::sync {
 bool ensure_sync_durability(sqlite3* db);
 
 // Creates sync tables and adds _hlc_* columns to replicated app tables.
-// Also applies durability PRAGMAs (WAL + synchronous=FULL).
+// Also applies durability PRAGMAs (WAL + synchronous=FULL), runs startup
+// integrity checks, and can rebuild malformed sync metadata tables when
+// corruption recovery is enabled.
 // Safe to call multiple times.
 bool ensure_sync_schema(sqlite3* db);
 

@@ -100,6 +100,25 @@ bool Membership::in_joint_consensus() const {
     return joint_members_.has_value();
 }
 
+void Membership::reset_members(std::vector<std::uint32_t> members) {
+    auto normalized = normalize(std::move(members));
+    if (normalized.empty()) {
+        log_consensus_event(
+            ConsensusLogLevel::Warning,
+            "membership",
+            "reset_members_rejected",
+            "reason=empty_members");
+        return;
+    }
+    members_ = std::move(normalized);
+    joint_members_.reset();
+    log_consensus_event(
+        ConsensusLogLevel::Info,
+        "membership",
+        "reset_members",
+        "members=" + std::to_string(members_.size()) + " quorum=" + std::to_string(quorum_size()));
+}
+
 std::vector<std::uint32_t> Membership::normalize(std::vector<std::uint32_t> members) {
     members.erase(std::remove(members.begin(), members.end(), 0), members.end());
     std::sort(members.begin(), members.end());

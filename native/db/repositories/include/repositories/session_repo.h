@@ -22,5 +22,6 @@ namespace tightrope::db {
 [[nodiscard]] std::optional<std::string>
 find_proxy_sticky_session_account(sqlite3* db, std::string_view session_key, std::int64_t now_ms) noexcept;
 [[nodiscard]] std::size_t purge_expired_proxy_sticky_sessions(sqlite3* db, std::int64_t now_ms) noexcept;
+[[nodiscard]] std::size_t purge_proxy_sticky_sessions_for_account(sqlite3* db, std::string_view account_id) noexcept;
 
 } // namespace tightrope::db

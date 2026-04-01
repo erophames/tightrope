@@ -5,10 +5,12 @@ interface RoutingOptionsSectionProps {
   stickyThreadsEnabled: boolean;
   preferEarlierResetAccounts: boolean;
   openaiCacheAffinityMaxAgeSeconds: number;
+  routingPlanModelPricingUsdPerMillion: string;
   onSetUpstreamStreamTransport: (transport: UpstreamStreamTransport) => void;
   onSetStickyThreadsEnabled: (enabled: boolean) => void;
   onSetPreferEarlierResetAccounts: (enabled: boolean) => void;
   onSetOpenaiCacheAffinityMaxAgeSeconds: (seconds: number) => void;
+  onSetRoutingPlanModelPricingUsdPerMillion: (value: string) => void;
 }
 
 export function RoutingOptionsSection({
@@ -16,10 +18,12 @@ export function RoutingOptionsSection({
   stickyThreadsEnabled,
   preferEarlierResetAccounts,
   openaiCacheAffinityMaxAgeSeconds,
+  routingPlanModelPricingUsdPerMillion,
   onSetUpstreamStreamTransport,
   onSetStickyThreadsEnabled,
   onSetPreferEarlierResetAccounts,
   onSetOpenaiCacheAffinityMaxAgeSeconds,
+  onSetRoutingPlanModelPricingUsdPerMillion,
 }: RoutingOptionsSectionProps) {
   return (
     <div className="settings-group">
@@ -82,6 +86,19 @@ export function RoutingOptionsSection({
           />
           <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>sec</span>
         </div>
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Plan/model pricing overrides</strong>
+          <span>Format: plan@model=input:output, plan@*=input:output (USD per 1M tokens)</span>
+        </div>
+        <input
+          className="setting-input"
+          type="text"
+          value={routingPlanModelPricingUsdPerMillion}
+          placeholder="plus@gpt-5.4=0.10:0.25, enterprise@*=0.40:0.60"
+          onChange={(event) => onSetRoutingPlanModelPricingUsdPerMillion(event.target.value)}
+        />
       </div>
     </div>
   );

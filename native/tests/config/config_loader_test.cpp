@@ -47,6 +47,8 @@ struct ConfigEnvScope final {
     EnvVarGuard db_path{"TIGHTROPE_DB_PATH"};
     EnvVarGuard config_path{"TIGHTROPE_CONFIG_PATH"};
     EnvVarGuard log_level{"TIGHTROPE_LOG_LEVEL"};
+    EnvVarGuard sticky_ttl_ms{"TIGHTROPE_STICKY_TTL_MS"};
+    EnvVarGuard sticky_cleanup_interval_ms{"TIGHTROPE_STICKY_CLEANUP_INTERVAL_MS"};
 
     ConfigEnvScope() {
         host.unset();
@@ -54,6 +56,8 @@ struct ConfigEnvScope final {
         db_path.unset();
         config_path.unset();
         log_level.unset();
+        sticky_ttl_ms.unset();
+        sticky_cleanup_interval_ms.unset();
     }
 };
 
@@ -104,6 +108,8 @@ TEST_CASE("config loader keeps sane defaults", "[config]") {
 
     REQUIRE(config.host == "127.0.0.1");
     REQUIRE(config.port == 2455);
+    REQUIRE(config.sticky_ttl_ms == 30 * 60 * 1000);
+    REQUIRE(config.sticky_cleanup_interval_ms == 60 * 1000);
 }
 
 TEST_CASE("config loader reads TOML values from override config path", "[config]") {
@@ -112,7 +118,10 @@ TEST_CASE("config loader reads TOML values from override config path", "[config]
         "host = \"10.0.0.8\"\n"
         "port = 4900\n"
         "db_path = \"/tmp/tightrope-from-file.db\"\n"
-        "log_level = \"debug\"\n"};
+        "log_level = \"debug\"\n"
+        "sticky_ttl_ms = 123456\n"
+        "[proxy]\n"
+        "sticky_cleanup_interval_ms = 3210\n"};
 
     REQUIRE(std::filesystem::exists(config_file.path()));
 
@@ -124,6 +133,8 @@ TEST_CASE("config loader reads TOML values from override config path", "[config]
     REQUIRE(config.port == 4900);
     REQUIRE(config.db_path == "/tmp/tightrope-from-file.db");
     REQUIRE(config.log_level == "debug");
+    REQUIRE(config.sticky_ttl_ms == 123456);
+    REQUIRE(config.sticky_cleanup_interval_ms == 3210);
     REQUIRE(config.config_path == config_file.path().string());
 }
 
@@ -133,12 +144,16 @@ TEST_CASE("config loader reads TOML path from env and env overrides file values"
         "host = \"10.0.0.9\"\n"
         "port = 4800\n"
         "db_path = \"/tmp/tightrope-from-toml.db\"\n"
-        "log_level = \"warn\"\n"};
+        "log_level = \"warn\"\n"
+        "sticky_ttl_ms = 5000\n"
+        "sticky_cleanup_interval_ms = 2000\n"};
 
     REQUIRE(std::filesystem::exists(config_file.path()));
     env_scope.config_path.set(config_file.path().string());
     env_scope.host.set("127.7.7.7");
     env_scope.port.set("6123");
+    env_scope.sticky_ttl_ms.set("4444");
+    env_scope.sticky_cleanup_interval_ms.set("3333");
 
     auto config = tightrope::config::load_config();
 
@@ -147,6 +162,8 @@ TEST_CASE("config loader reads TOML path from env and env overrides file values"
     REQUIRE(config.port == 6123);
     REQUIRE(config.db_path == "/tmp/tightrope-from-toml.db");
     REQUIRE(config.log_level == "warn");
+    REQUIRE(config.sticky_ttl_ms == 4444);
+    REQUIRE(config.sticky_cleanup_interval_ms == 3333);
 }
 
 TEST_CASE("config loader applies explicit overrides after env and TOML", "[config]") {
@@ -155,7 +172,9 @@ TEST_CASE("config loader applies explicit overrides after env and TOML", "[confi
         "host = \"10.0.0.10\"\n"
         "port = 4700\n"
         "db_path = \"/tmp/tightrope-file.db\"\n"
-        "log_level = \"trace\"\n"};
+        "log_level = \"trace\"\n"
+        "sticky_ttl_ms = 1111\n"
+        "sticky_cleanup_interval_ms = 2222\n"};
 
     REQUIRE(std::filesystem::exists(config_file.path()));
     env_scope.config_path.set(config_file.path().string());
@@ -163,17 +182,23 @@ TEST_CASE("config loader applies explicit overrides after env and TOML", "[confi
     env_scope.port.set("6500");
     env_scope.db_path.set("/tmp/tightrope-env.db");
     env_scope.log_level.set("error");
+    env_scope.sticky_ttl_ms.set("3333");
+    env_scope.sticky_cleanup_interval_ms.set("4444");
 
     auto config = tightrope::config::load_config({
         .host = "0.0.0.0",
         .port = 2456,
         .db_path = "/tmp/tightrope-override.db",
         .log_level = "info",
+        .sticky_ttl_ms = 120000,
+        .sticky_cleanup_interval_ms = 5000,
     });
 
     REQUIRE(config.host == "0.0.0.0");
     REQUIRE(config.port == 2456);
     REQUIRE(config.db_path == "/tmp/tightrope-override.db");
     REQUIRE(config.log_level == "info");
+    REQUIRE(config.sticky_ttl_ms == 120000);
+    REQUIRE(config.sticky_cleanup_interval_ms == 5000);
     REQUIRE(config.config_path == config_file.path().string());
 }

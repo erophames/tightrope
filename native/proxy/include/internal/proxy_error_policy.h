@@ -17,6 +17,7 @@ std::string normalize_upstream_error_code(std::string_view code, std::string_vie
 std::string resolved_upstream_error_code(const UpstreamExecutionResult& upstream);
 std::string extract_error_code_from_stream_events(const std::vector<std::string>& events);
 std::string default_error_message_for_code(std::string_view normalized_error_code);
+bool upstream_401_body_indicates_deactivated_account(const UpstreamExecutionResult& upstream);
 
 bool should_retry_stream_result(const UpstreamExecutionResult& upstream);
 bool should_retry_compact_result(const UpstreamExecutionResult& upstream);

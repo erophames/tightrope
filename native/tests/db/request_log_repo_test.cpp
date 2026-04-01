@@ -1,8 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <unordered_map>
 
 #include <sqlite3.h>
 
@@ -65,6 +67,77 @@ TEST_CASE("request log repository persists and reads request lifecycle rows", "[
     REQUIRE(rows.front().transport.has_value());
     REQUIRE(*rows.front().transport == "http");
     REQUIRE_FALSE(rows.front().requested_at.empty());
+
+    sqlite3_close(db);
+    std::filesystem::remove(db_path);
+}
+
+TEST_CASE("request log repository aggregates account request counts and costs", "[db][request-log]") {
+    const auto db_path = make_temp_db_path();
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) == SQLITE_OK);
+    REQUIRE(db != nullptr);
+    REQUIRE(tightrope::db::run_migrations(db));
+    REQUIRE(tightrope::db::ensure_request_log_schema(db));
+
+    tightrope::db::OauthAccountUpsert first;
+    first.email = "agg-a@example.com";
+    first.provider = "openai";
+    first.chatgpt_account_id = "acc-agg-a";
+    first.plan_type = "plus";
+    first.access_token_encrypted = "enc-a";
+    first.refresh_token_encrypted = "enc-a-refresh";
+    first.id_token_encrypted = "enc-a-id";
+    const auto upserted_first = tightrope::db::upsert_oauth_account(db, first);
+    REQUIRE(upserted_first.has_value());
+
+    tightrope::db::OauthAccountUpsert second;
+    second.email = "agg-b@example.com";
+    second.provider = "openai";
+    second.chatgpt_account_id = "acc-agg-b";
+    second.plan_type = "enterprise";
+    second.access_token_encrypted = "enc-b";
+    second.refresh_token_encrypted = "enc-b-refresh";
+    second.id_token_encrypted = "enc-b-id";
+    const auto upserted_second = tightrope::db::upsert_oauth_account(db, second);
+    REQUIRE(upserted_second.has_value());
+
+    tightrope::db::RequestLogWrite write_a_one;
+    write_a_one.account_id = upserted_first->id;
+    write_a_one.path = "/v1/responses";
+    write_a_one.method = "POST";
+    write_a_one.status_code = 200;
+    write_a_one.total_cost = 1.25;
+    REQUIRE(tightrope::db::append_request_log(db, write_a_one));
+
+    tightrope::db::RequestLogWrite write_a_two = write_a_one;
+    write_a_two.total_cost = 0.75;
+    REQUIRE(tightrope::db::append_request_log(db, write_a_two));
+
+    tightrope::db::RequestLogWrite write_b = write_a_one;
+    write_b.account_id = upserted_second->id;
+    write_b.total_cost = 0.50;
+    REQUIRE(tightrope::db::append_request_log(db, write_b));
+
+    tightrope::db::RequestLogWrite write_without_account = write_a_one;
+    write_without_account.account_id = std::nullopt;
+    write_without_account.total_cost = 999.0;
+    REQUIRE(tightrope::db::append_request_log(db, write_without_account));
+
+    const auto aggregates = tightrope::db::list_account_request_cost_aggregates(db, 24);
+    REQUIRE(aggregates.size() == 2);
+
+    std::unordered_map<std::int64_t, tightrope::db::AccountRequestCostAggregate> by_account;
+    for (const auto& aggregate : aggregates) {
+        by_account.emplace(aggregate.account_id, aggregate);
+    }
+    REQUIRE(by_account.find(upserted_first->id) != by_account.end());
+    REQUIRE(by_account.find(upserted_second->id) != by_account.end());
+
+    REQUIRE(by_account[upserted_first->id].requests == 2);
+    REQUIRE(by_account[upserted_first->id].total_cost == Catch::Approx(2.0));
+    REQUIRE(by_account[upserted_second->id].requests == 1);
+    REQUIRE(by_account[upserted_second->id].total_cost == Catch::Approx(0.5));
 
     sqlite3_close(db);
     std::filesystem::remove(db_path);

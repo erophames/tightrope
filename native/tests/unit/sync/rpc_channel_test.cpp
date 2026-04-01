@@ -65,3 +65,113 @@ TEST_CASE("rpc channel encodes multi-byte payload size in little-endian", "[sync
     REQUIRE(bytes[4] == 0x00);
     REQUIRE(bytes[5] == 0x00);
 }
+
+TEST_CASE("rpc ingress queue pauses and resumes reads by queued-frame watermarks", "[sync][transport][rpc]") {
+    tightrope::sync::transport::RpcIngressQueue queue({
+        .max_buffered_bytes = 1024,
+        .pause_buffered_bytes = 512,
+        .resume_buffered_bytes = 128,
+        .max_queued_frames = 2,
+        .max_queued_payload_bytes = 1024,
+        .max_frame_payload_bytes = 512,
+    });
+
+    const auto first = tightrope::sync::transport::RpcChannel::encode({
+        .channel = 1,
+        .payload = std::vector<std::uint8_t>{'a'},
+    });
+    const auto second = tightrope::sync::transport::RpcChannel::encode({
+        .channel = 2,
+        .payload = std::vector<std::uint8_t>{'b'},
+    });
+    std::vector<std::uint8_t> combined;
+    combined.insert(combined.end(), first.begin(), first.end());
+    combined.insert(combined.end(), second.begin(), second.end());
+
+    std::string error;
+    REQUIRE(queue.ingest(combined, &error));
+    REQUIRE(error.empty());
+    REQUIRE(queue.queued_frames() == 2);
+    REQUIRE(queue.should_pause_reads());
+
+    const auto popped = queue.pop();
+    REQUIRE(popped.has_value());
+    REQUIRE(popped->channel == 1);
+    REQUIRE(queue.queued_frames() == 1);
+    REQUIRE(queue.should_resume_reads());
+}
+
+TEST_CASE("rpc ingress queue rejects oversized frame payload", "[sync][transport][rpc]") {
+    tightrope::sync::transport::RpcIngressQueue queue({
+        .max_buffered_bytes = 1024,
+        .pause_buffered_bytes = 512,
+        .resume_buffered_bytes = 128,
+        .max_queued_frames = 4,
+        .max_queued_payload_bytes = 1024,
+        .max_frame_payload_bytes = 3,
+    });
+
+    const auto encoded = tightrope::sync::transport::RpcChannel::encode({
+        .channel = 9,
+        .payload = std::vector<std::uint8_t>{'t', 'o', 'o', '!', '!'},
+    });
+
+    std::string error;
+    REQUIRE_FALSE(queue.ingest(encoded, &error));
+    REQUIRE(error.find("payload exceeds limit") != std::string::npos);
+    REQUIRE(queue.queued_frames() == 0);
+}
+
+TEST_CASE("rpc ingress queue retains undecoded frame when queue is full", "[sync][transport][rpc]") {
+    tightrope::sync::transport::RpcIngressQueue queue({
+        .max_buffered_bytes = 1024,
+        .pause_buffered_bytes = 512,
+        .resume_buffered_bytes = 128,
+        .max_queued_frames = 1,
+        .max_queued_payload_bytes = 1024,
+        .max_frame_payload_bytes = 512,
+    });
+
+    const auto first = tightrope::sync::transport::RpcChannel::encode({
+        .channel = 1,
+        .payload = std::vector<std::uint8_t>{'1'},
+    });
+    const auto second = tightrope::sync::transport::RpcChannel::encode({
+        .channel = 2,
+        .payload = std::vector<std::uint8_t>{'2'},
+    });
+    std::vector<std::uint8_t> combined;
+    combined.insert(combined.end(), first.begin(), first.end());
+    combined.insert(combined.end(), second.begin(), second.end());
+
+    REQUIRE(queue.ingest(combined));
+    REQUIRE(queue.queued_frames() == 1);
+    REQUIRE(queue.buffered_bytes() > 0);
+    REQUIRE(queue.should_pause_reads());
+
+    const auto popped = queue.pop();
+    REQUIRE(popped.has_value());
+    REQUIRE(popped->channel == 1);
+    REQUIRE(queue.queued_frames() == 1);
+
+    const auto second_popped = queue.pop();
+    REQUIRE(second_popped.has_value());
+    REQUIRE(second_popped->channel == 2);
+    REQUIRE(queue.buffered_bytes() == 0);
+}
+
+TEST_CASE("rpc ingress queue rejects chunk that exceeds buffer budget", "[sync][transport][rpc]") {
+    tightrope::sync::transport::RpcIngressQueue queue({
+        .max_buffered_bytes = 8,
+        .pause_buffered_bytes = 8,
+        .resume_buffered_bytes = 4,
+        .max_queued_frames = 2,
+        .max_queued_payload_bytes = 1024,
+        .max_frame_payload_bytes = 512,
+    });
+
+    std::vector<std::uint8_t> chunk(9, 0xAB);
+    std::string error;
+    REQUIRE_FALSE(queue.ingest(chunk, &error));
+    REQUIRE(error.find("buffer budget exceeded") != std::string::npos);
+}

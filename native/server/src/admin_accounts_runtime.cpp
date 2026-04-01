@@ -1,7 +1,7 @@
 #include "internal/admin_runtime_parts.h"
 
 #include <charconv>
-#include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,6 +13,7 @@
 #include "internal/admin_runtime_common.h"
 #include "internal/http_runtime_utils.h"
 #include "text/json_escape.h"
+#include "time/clock.h"
 #include "account_traffic.h"
 #include "controllers/accounts_controller.h"
 
@@ -41,6 +42,20 @@ std::string optional_int_json(const std::optional<int>& value) {
     return std::to_string(*value);
 }
 
+std::string optional_uint64_json(const std::optional<std::uint64_t>& value) {
+    if (!value.has_value()) {
+        return "null";
+    }
+    return std::to_string(*value);
+}
+
+std::string optional_double_json(const std::optional<double>& value) {
+    if (!value.has_value()) {
+        return "null";
+    }
+    return number_json(*value);
+}
+
 std::string account_json(const controllers::AccountPayload& account) {
     return std::string(R"({"accountId":)") + core::text::quote_json_string(account.account_id) + R"(,"email":)" +
            core::text::quote_json_string(account.email) + R"(,"provider":)" +
@@ -48,7 +63,22 @@ std::string account_json(const controllers::AccountPayload& account) {
            core::text::quote_json_string(account.status) + R"(,"planType":)" +
            optional_string_json(account.plan_type) + R"(,"quotaPrimaryPercent":)" +
            optional_int_json(account.quota_primary_percent) + R"(,"quotaSecondaryPercent":)" +
-           optional_int_json(account.quota_secondary_percent) + "}";
+           optional_int_json(account.quota_secondary_percent) + R"(,"requests24h":)" +
+           optional_uint64_json(account.requests_24h) + R"(,"totalCost24hUsd":)" +
+           optional_double_json(account.total_cost_24h_usd) + R"(,"costNorm":)" +
+           optional_double_json(account.cost_norm) + "}";
+}
+
+std::string token_migration_json(const controllers::AccountTokenMigrationPayload& migration) {
+    return std::string(R"({"scannedAccounts":)") + std::to_string(migration.scanned_accounts) +
+           R"(,"plaintextAccounts":)" + std::to_string(migration.plaintext_accounts) +
+           R"(,"plaintextTokens":)" + std::to_string(migration.plaintext_tokens) +
+           R"(,"migratedAccounts":)" + std::to_string(migration.migrated_accounts) +
+           R"(,"migratedTokens":)" + std::to_string(migration.migrated_tokens) +
+           R"(,"failedAccounts":)" + std::to_string(migration.failed_accounts) +
+           R"(,"dryRun":)" + bool_json(migration.dry_run) +
+           R"(,"strictModeEnabled":)" + bool_json(migration.strict_mode_enabled) +
+           R"(,"migratePlaintextOnReadEnabled":)" + bool_json(migration.migrate_plaintext_on_read_enabled) + "}";
 }
 
 std::string account_traffic_json(const controllers::AccountTrafficPayload& account) {
@@ -93,6 +123,30 @@ std::optional<std::uint64_t> parse_account_id_u64(const std::string_view account
     return parsed;
 }
 
+std::optional<bool> parse_query_bool(const std::string_view raw) {
+    if (raw.empty()) {
+        return std::nullopt;
+    }
+    std::string normalized;
+    normalized.reserve(raw.size());
+    for (const auto ch : raw) {
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') {
+            continue;
+        }
+        normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+    if (normalized.empty()) {
+        return std::nullopt;
+    }
+    if (normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on") {
+        return true;
+    }
+    if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off") {
+        return false;
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> account_traffic_frame_binary(
     const std::uint8_t frame_type,
     const std::int64_t generated_at_ms,
@@ -116,9 +170,13 @@ std::optional<std::string> account_traffic_frame_binary(
     return frame;
 }
 
+core::time::Clock& runtime_clock() {
+    static core::time::SystemClock clock;
+    return clock;
+}
+
 std::int64_t now_ms() {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return runtime_clock().unix_ms_now();
 }
 
 void send_traffic_snapshot_frames(uWS::WebSocket<false, true, TrafficWsContext>* ws) {
@@ -276,6 +334,25 @@ void wire_accounts_routes(uWS::App& app) {
         const auto response = controllers::refresh_account_usage(account_id);
         if (response.status == 200) {
             http::write_json(res, 200, account_json(response.account));
+            return;
+        }
+        http::write_json(res, response.status, dashboard_error_json(response.code, response.message));
+    });
+
+    app.post("/api/accounts/migrate-token-storage", [](uWS::HttpResponse<false>* res, uWS::HttpRequest* req) {
+        const auto dry_run_raw = req->getQuery("dryRun");
+        const auto dry_run_parsed = parse_query_bool(dry_run_raw);
+        if (!dry_run_raw.empty() && !dry_run_parsed.has_value()) {
+            http::write_json(
+                res,
+                400,
+                dashboard_error_json("invalid_query", "Invalid dryRun query value; expected true/false")
+            );
+            return;
+        }
+        const auto response = controllers::migrate_account_token_storage(dry_run_parsed.value_or(false));
+        if (response.status == 200) {
+            http::write_json(res, 200, token_migration_json(response.migration));
             return;
         }
         http::write_json(res, response.status, dashboard_error_json(response.code, response.message));

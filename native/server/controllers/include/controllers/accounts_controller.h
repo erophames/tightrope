@@ -18,6 +18,9 @@ struct AccountPayload {
     std::optional<std::string> plan_type;
     std::optional<int> quota_primary_percent;
     std::optional<int> quota_secondary_percent;
+    std::optional<std::uint64_t> requests_24h;
+    std::optional<double> total_cost_24h_usd;
+    std::optional<double> cost_norm;
 };
 
 struct AccountsResponse {
@@ -50,12 +53,32 @@ struct AccountTrafficResponse {
     std::vector<AccountTrafficPayload> accounts;
 };
 
+struct AccountTokenMigrationPayload {
+    std::int64_t scanned_accounts = 0;
+    std::int64_t plaintext_accounts = 0;
+    std::int64_t plaintext_tokens = 0;
+    std::int64_t migrated_accounts = 0;
+    std::int64_t migrated_tokens = 0;
+    std::int64_t failed_accounts = 0;
+    bool dry_run = false;
+    bool strict_mode_enabled = false;
+    bool migrate_plaintext_on_read_enabled = true;
+};
+
+struct AccountTokenMigrationResponse {
+    int status = 500;
+    std::string code;
+    std::string message;
+    AccountTokenMigrationPayload migration;
+};
+
 AccountsResponse list_accounts(sqlite3* db = nullptr);
 AccountMutationResponse import_account(std::string_view email, std::string_view provider, sqlite3* db = nullptr);
 AccountMutationResponse pause_account(std::string_view account_id, sqlite3* db = nullptr);
 AccountMutationResponse reactivate_account(std::string_view account_id, sqlite3* db = nullptr);
 AccountMutationResponse delete_account(std::string_view account_id, sqlite3* db = nullptr);
 AccountMutationResponse refresh_account_usage(std::string_view account_id, sqlite3* db = nullptr);
+AccountTokenMigrationResponse migrate_account_token_storage(bool dry_run = false, sqlite3* db = nullptr);
 AccountTrafficResponse list_account_proxy_traffic(sqlite3* db = nullptr);
 
 } // namespace tightrope::server::controllers

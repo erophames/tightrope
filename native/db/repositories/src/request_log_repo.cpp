@@ -181,6 +181,51 @@ LIMIT ?1 OFFSET ?2;
     return records;
 }
 
+std::vector<AccountRequestCostAggregate>
+list_account_request_cost_aggregates(sqlite3* db, const std::uint32_t lookback_hours) noexcept {
+    std::vector<AccountRequestCostAggregate> aggregates;
+    auto handle = sqlite_repo_utils::resolve_database(db);
+    if (!handle.valid() || !ensure_schema(*handle.db)) {
+        return aggregates;
+    }
+
+    const auto window_hours = std::max<std::uint32_t>(1, lookback_hours);
+    const auto lookback_window = "-" + std::to_string(window_hours) + " hours";
+
+    constexpr const char* kSelectSql = R"SQL(
+SELECT account_id,
+       COUNT(*) AS request_count,
+       COALESCE(SUM(total_cost), 0.0) AS total_cost
+FROM request_logs
+WHERE account_id IS NOT NULL
+  AND requested_at >= datetime('now', ?1)
+GROUP BY account_id;
+)SQL";
+
+    try {
+        SQLite::Statement stmt(*handle.db, kSelectSql);
+        stmt.bind(1, lookback_window);
+
+        while (stmt.executeStep()) {
+            if (stmt.getColumn(0).isNull()) {
+                continue;
+            }
+
+            AccountRequestCostAggregate aggregate;
+            aggregate.account_id = stmt.getColumn(0).getInt64();
+            aggregate.requests = stmt.getColumn(1).isNull()
+                ? 0
+                : static_cast<std::uint64_t>(std::max<std::int64_t>(0, stmt.getColumn(1).getInt64()));
+            aggregate.total_cost = stmt.getColumn(2).isNull() ? 0.0 : std::max(0.0, stmt.getColumn(2).getDouble());
+            aggregates.push_back(std::move(aggregate));
+        }
+    } catch (...) {
+        return {};
+    }
+
+    return aggregates;
+}
+
 std::optional<std::int64_t> find_account_id_by_chatgpt_account_id(sqlite3* db, const std::string_view chatgpt_account_id) noexcept {
     if (chatgpt_account_id.empty()) {
         return std::nullopt;

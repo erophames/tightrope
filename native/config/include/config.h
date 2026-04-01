@@ -14,6 +14,8 @@ struct Config {
     std::string db_path = "store.db";
     std::string config_path;
     std::string log_level = "info";
+    std::int64_t sticky_ttl_ms = 30 * 60 * 1000;
+    std::int64_t sticky_cleanup_interval_ms = 60 * 1000;
 };
 
 struct ConfigOverrides {
@@ -22,6 +24,8 @@ struct ConfigOverrides {
     std::optional<std::string> db_path;
     std::optional<std::string> config_path;
     std::optional<std::string> log_level;
+    std::optional<std::int64_t> sticky_ttl_ms;
+    std::optional<std::int64_t> sticky_cleanup_interval_ms;
 };
 
 } // namespace tightrope::config

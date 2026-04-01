@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "repositories/account_repo.h"
+#include "token_store.h"
 
 namespace tightrope::auth::oauth {
 
@@ -22,6 +23,52 @@ struct StoredTokenRecord {
     std::string refresh_token;
     std::string id_token;
 };
+
+constexpr const char* kUpdateStoredTokensSql = R"SQL(
+UPDATE accounts
+SET refresh_token_encrypted = ?1,
+    id_token_encrypted = ?2,
+    updated_at = datetime('now')
+WHERE id = ?3;
+)SQL";
+
+std::string sqlite_text_or_empty(const unsigned char* text) {
+    return text == nullptr ? std::string() : std::string(reinterpret_cast<const char*>(text));
+}
+
+bool persist_migrated_stored_tokens(
+    sqlite3* db,
+    const std::int64_t account_id,
+    const std::string& refresh_token_stored,
+    const std::string& id_token_stored
+) {
+    if (db == nullptr || account_id <= 0 || refresh_token_stored.empty()) {
+        return false;
+    }
+    sqlite3_stmt* stmt = nullptr;
+    if (sqlite3_prepare_v2(db, kUpdateStoredTokensSql, -1, &stmt, nullptr) != SQLITE_OK || stmt == nullptr) {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+        }
+        return false;
+    }
+    const auto finalize = [&stmt]() {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+            stmt = nullptr;
+        }
+    };
+
+    if (sqlite3_bind_text(stmt, 1, refresh_token_stored.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 2, id_token_stored.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_int64(stmt, 3, account_id) != SQLITE_OK) {
+        finalize();
+        return false;
+    }
+    const auto rc = sqlite3_step(stmt);
+    finalize();
+    return rc == SQLITE_DONE;
+}
 
 std::optional<StoredTokenRecord> find_active_account_tokens(sqlite3* db, const std::string_view chatgpt_account_id) {
     if (db == nullptr || chatgpt_account_id.empty()) {
@@ -64,17 +111,57 @@ LIMIT 1;
 
     StoredTokenRecord record;
     record.id = sqlite3_column_int64(stmt, 0);
-    if (const auto* refresh_raw = sqlite3_column_text(stmt, 1); refresh_raw != nullptr) {
-        record.refresh_token = reinterpret_cast<const char*>(refresh_raw);
-    }
-    if (const auto* id_raw = sqlite3_column_text(stmt, 2); id_raw != nullptr) {
-        record.id_token = reinterpret_cast<const char*>(id_raw);
-    }
+    record.refresh_token = sqlite_text_or_empty(sqlite3_column_text(stmt, 1));
+    record.id_token = sqlite_text_or_empty(sqlite3_column_text(stmt, 2));
 
     finalize();
     if (record.id <= 0 || record.refresh_token.empty()) {
         return std::nullopt;
     }
+
+    bool refresh_migrated = false;
+    std::string migration_error;
+    const auto refresh_token_stored = ::tightrope::auth::crypto::migrate_plaintext_token_for_storage(
+        record.refresh_token,
+        &refresh_migrated,
+        &migration_error
+    );
+    if (!refresh_token_stored.has_value() || refresh_token_stored->empty()) {
+        return std::nullopt;
+    }
+    std::optional<std::string> id_token_stored = std::nullopt;
+    bool id_migrated = false;
+    if (!record.id_token.empty()) {
+        id_token_stored = ::tightrope::auth::crypto::migrate_plaintext_token_for_storage(
+            record.id_token,
+            &id_migrated,
+            &migration_error
+        );
+        if (!id_token_stored.has_value()) {
+            return std::nullopt;
+        }
+    }
+    if ((refresh_migrated || id_migrated) &&
+        !persist_migrated_stored_tokens(db, record.id, *refresh_token_stored, id_token_stored.value_or(""))) {
+        return std::nullopt;
+    }
+
+    std::string token_error;
+    const auto refresh_token = ::tightrope::auth::crypto::decrypt_token_from_storage(*refresh_token_stored, &token_error);
+    if (!refresh_token.has_value() || refresh_token->empty()) {
+        return std::nullopt;
+    }
+    record.refresh_token = *refresh_token;
+
+    if (!record.id_token.empty()) {
+        const auto id_token =
+            ::tightrope::auth::crypto::decrypt_token_from_storage(id_token_stored.value_or(record.id_token), &token_error);
+        if (!id_token.has_value()) {
+            return std::nullopt;
+        }
+        record.id_token = *id_token;
+    }
+
     return record;
 }
 
@@ -114,9 +201,20 @@ WHERE id = ?4;
     };
 
     const std::string id_token = tokens.id_token.empty() ? fallback_id_token : tokens.id_token;
-    if (sqlite3_bind_text(stmt, 1, tokens.access_token.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
-        sqlite3_bind_text(stmt, 2, tokens.refresh_token.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
-        sqlite3_bind_text(stmt, 3, id_token.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+    std::string token_error;
+    const auto access_token_encrypted =
+        ::tightrope::auth::crypto::encrypt_token_for_storage(tokens.access_token, &token_error);
+    const auto refresh_token_encrypted =
+        ::tightrope::auth::crypto::encrypt_token_for_storage(tokens.refresh_token, &token_error);
+    const auto id_token_encrypted = ::tightrope::auth::crypto::encrypt_token_for_storage(id_token, &token_error);
+    if (!access_token_encrypted.has_value() || !refresh_token_encrypted.has_value() || !id_token_encrypted.has_value()) {
+        finalize();
+        return false;
+    }
+
+    if (sqlite3_bind_text(stmt, 1, access_token_encrypted->c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 2, refresh_token_encrypted->c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_text(stmt, 3, id_token_encrypted->c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK ||
         sqlite3_bind_int64(stmt, 4, account_id) != SQLITE_OK) {
         finalize();
         return false;

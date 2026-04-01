@@ -1,6 +1,17 @@
 #include "power_of_two.h"
 
+#include <mutex>
+
 namespace tightrope::balancer {
+
+namespace {
+
+std::mutex& power_of_two_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+} // namespace
 
 PowerOfTwoPicker::PowerOfTwoPicker(const std::uint32_t seed) : rng_(seed) {}
 
@@ -11,6 +22,7 @@ const AccountCandidate* PowerOfTwoPicker::pick(CandidateView eligible_accounts, 
     if (eligible_accounts.size() == 1) {
         return eligible_accounts.front();
     }
+    const std::lock_guard<std::mutex> lock(power_of_two_mutex());
 
     std::uniform_int_distribution<std::size_t> first_distribution(0, eligible_accounts.size() - 1);
     const auto first_index = first_distribution(rng_);

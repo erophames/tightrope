@@ -1,5 +1,5 @@
 #pragma once
-// bcrypt password verification
+// Password hashing and verification helpers.
 
 #include <optional>
 #include <string>

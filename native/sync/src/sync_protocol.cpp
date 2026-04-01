@@ -1,6 +1,8 @@
 #include "sync_protocol.h"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -11,6 +13,7 @@
 
 #include <boost/asio/buffer.hpp>
 #include <lz4.h>
+#include <sodium.h>
 
 #include "sync_logging.h"
 
@@ -111,6 +114,78 @@ bool read_string(std::size_t& cursor, const std::vector<std::uint8_t>& in, std::
     return true;
 }
 
+std::string to_hex(const unsigned char* bytes, const std::size_t size) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string hex;
+    hex.resize(size * 2);
+    for (std::size_t index = 0; index < size; ++index) {
+        const auto value = bytes[index];
+        hex[index * 2] = kHex[(value >> 4U) & 0x0F];
+        hex[index * 2 + 1] = kHex[value & 0x0F];
+    }
+    return hex;
+}
+
+std::optional<unsigned char> decode_hex_nibble(const char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return static_cast<unsigned char>(ch - '0');
+    }
+    const auto lowered = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (lowered >= 'a' && lowered <= 'f') {
+        return static_cast<unsigned char>(10 + (lowered - 'a'));
+    }
+    return std::nullopt;
+}
+
+bool decode_hmac_hex(
+    const std::string_view hex,
+    std::array<unsigned char, crypto_auth_hmacsha256_BYTES>& out
+) {
+    if (hex.size() != out.size() * 2) {
+        return false;
+    }
+    for (std::size_t index = 0; index < out.size(); ++index) {
+        const auto high = decode_hex_nibble(hex[index * 2]);
+        const auto low = decode_hex_nibble(hex[index * 2 + 1]);
+        if (!high.has_value() || !low.has_value()) {
+            return false;
+        }
+        out[index] = static_cast<unsigned char>(((*high) << 4U) | *low);
+    }
+    return true;
+}
+
+std::vector<std::uint8_t> handshake_auth_payload(const HandshakeFrame& frame) {
+    std::vector<std::uint8_t> payload;
+    payload.reserve(16 + 4 + frame.auth_key_id.size());
+    write_u32(payload, frame.site_id);
+    write_u32(payload, frame.schema_version);
+    write_u64(payload, frame.last_recv_seq_from_peer);
+    write_string(payload, frame.auth_key_id);
+    return payload;
+}
+
+std::optional<std::string> compute_handshake_hmac_hex(const HandshakeFrame& frame, const std::string_view shared_secret) {
+    if (shared_secret.empty()) {
+        return std::nullopt;
+    }
+    std::array<unsigned char, crypto_auth_hmacsha256_BYTES> digest{};
+    const auto payload = handshake_auth_payload(frame);
+    crypto_auth_hmacsha256_state state{};
+    crypto_auth_hmacsha256_init(
+        &state,
+        reinterpret_cast<const unsigned char*>(shared_secret.data()),
+        shared_secret.size()
+    );
+    crypto_auth_hmacsha256_update(
+        &state,
+        reinterpret_cast<const unsigned char*>(payload.data()),
+        static_cast<unsigned long long>(payload.size())
+    );
+    crypto_auth_hmacsha256_final(&state, digest.data());
+    return to_hex(digest.data(), digest.size());
+}
+
 std::optional<std::vector<std::uint8_t>> compress_lz4(const std::vector<std::uint8_t>& payload) {
     const auto max_size = LZ4_compressBound(static_cast<int>(payload.size()));
     if (max_size <= 0) {
@@ -150,16 +225,29 @@ decompress_lz4(const std::vector<std::uint8_t>& payload, const std::size_t uncom
 
 std::vector<std::uint8_t> encode_handshake(const HandshakeFrame& frame) {
     std::vector<std::uint8_t> out;
-    out.reserve(16);
+    out.reserve(16 + (frame.auth_key_id.empty() ? 0 : frame.auth_key_id.size() + 4) +
+                (frame.auth_hmac_hex.empty() ? 0 : frame.auth_hmac_hex.size() + 4));
     write_u32(out, frame.site_id);
     write_u32(out, frame.schema_version);
     write_u64(out, frame.last_recv_seq_from_peer);
+    if (!frame.auth_key_id.empty() || !frame.auth_hmac_hex.empty()) {
+        if (!write_string(out, frame.auth_key_id) || !write_string(out, frame.auth_hmac_hex)) {
+            log_sync_event(
+                SyncLogLevel::Error,
+                "sync_protocol",
+                "encode_handshake_failed",
+                "site_id=" + std::to_string(frame.site_id) + " reason=auth_field_too_large");
+            return {};
+        }
+    }
     log_sync_event(
         SyncLogLevel::Trace,
         "sync_protocol",
         "encode_handshake",
         "site_id=" + std::to_string(frame.site_id) + " schema=" + std::to_string(frame.schema_version) +
-            " last_recv=" + std::to_string(frame.last_recv_seq_from_peer) + " bytes=" + std::to_string(out.size()));
+            " last_recv=" + std::to_string(frame.last_recv_seq_from_peer) +
+            " auth=" + (frame.auth_hmac_hex.empty() ? std::string("0") : std::string("1")) +
+            " bytes=" + std::to_string(out.size()));
     return out;
 }
 
@@ -167,7 +255,7 @@ std::optional<HandshakeFrame> decode_handshake(const std::vector<std::uint8_t>& 
     std::size_t cursor = 0;
     HandshakeFrame frame;
     if (!read_u32(cursor, bytes, frame.site_id) || !read_u32(cursor, bytes, frame.schema_version) ||
-        !read_u64(cursor, bytes, frame.last_recv_seq_from_peer) || cursor != bytes.size()) {
+        !read_u64(cursor, bytes, frame.last_recv_seq_from_peer)) {
         log_sync_event(
             SyncLogLevel::Warning,
             "sync_protocol",
@@ -175,13 +263,200 @@ std::optional<HandshakeFrame> decode_handshake(const std::vector<std::uint8_t>& 
             "bytes=" + std::to_string(bytes.size()));
         return std::nullopt;
     }
+    if (cursor != bytes.size()) {
+        if (!read_string(cursor, bytes, frame.auth_key_id) || !read_string(cursor, bytes, frame.auth_hmac_hex) ||
+            cursor != bytes.size()) {
+            log_sync_event(
+                SyncLogLevel::Warning,
+                "sync_protocol",
+                "decode_handshake_failed",
+                "bytes=" + std::to_string(bytes.size()) + " reason=invalid_auth_fields");
+            return std::nullopt;
+        }
+    }
     log_sync_event(
         SyncLogLevel::Trace,
         "sync_protocol",
         "decode_handshake",
         "site_id=" + std::to_string(frame.site_id) + " schema=" + std::to_string(frame.schema_version) +
-            " last_recv=" + std::to_string(frame.last_recv_seq_from_peer));
+            " last_recv=" + std::to_string(frame.last_recv_seq_from_peer) +
+            " auth=" + (frame.auth_hmac_hex.empty() ? std::string("0") : std::string("1")));
     return frame;
+}
+
+void sign_handshake(HandshakeFrame& frame, const std::string_view shared_secret) {
+    if (const auto signature = compute_handshake_hmac_hex(frame, shared_secret); signature.has_value()) {
+        frame.auth_hmac_hex = *signature;
+        return;
+    }
+    frame.auth_hmac_hex.clear();
+}
+
+HandshakeAuthValidationResult validate_handshake_auth(
+    const HandshakeFrame& remote,
+    const std::string_view shared_secret,
+    const bool require_auth
+) {
+    HandshakeAuthValidationResult result{};
+    if (remote.auth_hmac_hex.empty()) {
+        if (require_auth) {
+            result.error = "handshake auth required but missing hmac";
+            log_sync_event(
+                SyncLogLevel::Warning,
+                "sync_protocol",
+                "validate_handshake_auth_rejected",
+                "site_id=" + std::to_string(remote.site_id) + " error=" + result.error);
+            return result;
+        }
+        result.accepted = true;
+        return result;
+    }
+
+    if (shared_secret.empty()) {
+        result.error = "handshake auth present but shared secret is not configured";
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_auth_rejected",
+            "site_id=" + std::to_string(remote.site_id) + " error=" + result.error);
+        return result;
+    }
+
+    std::array<unsigned char, crypto_auth_hmacsha256_BYTES> provided{};
+    if (!decode_hmac_hex(remote.auth_hmac_hex, provided)) {
+        result.error = "handshake auth hmac must be 64 hex characters";
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_auth_rejected",
+            "site_id=" + std::to_string(remote.site_id) + " error=" + result.error);
+        return result;
+    }
+
+    const auto expected_hex = compute_handshake_hmac_hex(remote, shared_secret);
+    if (!expected_hex.has_value()) {
+        result.error = "handshake auth could not be computed";
+        log_sync_event(
+            SyncLogLevel::Error,
+            "sync_protocol",
+            "validate_handshake_auth_rejected",
+            "site_id=" + std::to_string(remote.site_id) + " error=" + result.error);
+        return result;
+    }
+
+    std::array<unsigned char, crypto_auth_hmacsha256_BYTES> expected{};
+    if (!decode_hmac_hex(*expected_hex, expected)) {
+        result.error = "handshake auth expected digest is invalid";
+        log_sync_event(
+            SyncLogLevel::Error,
+            "sync_protocol",
+            "validate_handshake_auth_rejected",
+            "site_id=" + std::to_string(remote.site_id) + " error=" + result.error);
+        return result;
+    }
+
+    if (crypto_verify_32(provided.data(), expected.data()) != 0) {
+        result.error = "handshake auth hmac mismatch";
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_auth_rejected",
+            "site_id=" + std::to_string(remote.site_id) + " error=" + result.error);
+        return result;
+    }
+
+    result.accepted = true;
+    log_sync_event(
+        SyncLogLevel::Debug,
+        "sync_protocol",
+        "validate_handshake_auth_accepted",
+        "site_id=" + std::to_string(remote.site_id));
+    return result;
+}
+
+HandshakeValidationResult validate_handshake_schema_version(
+    const HandshakeFrame& remote,
+    const std::uint32_t local_schema_version,
+    const bool allow_downgrade,
+    const std::uint32_t min_supported_schema_version
+) {
+    HandshakeValidationResult result{};
+    if (min_supported_schema_version == 0) {
+        result.error = "min_supported_schema_version must be >= 1";
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_schema_rejected",
+            result.error);
+        return result;
+    }
+
+    if (local_schema_version < min_supported_schema_version) {
+        result.error = "local schema version " + std::to_string(local_schema_version) +
+                       " is below minimum supported " + std::to_string(min_supported_schema_version);
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_schema_rejected",
+            result.error);
+        return result;
+    }
+
+    if (remote.schema_version < min_supported_schema_version) {
+        result.error = "peer schema version " + std::to_string(remote.schema_version) +
+                       " is below minimum supported " + std::to_string(min_supported_schema_version);
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_schema_rejected",
+            result.error);
+        return result;
+    }
+
+    if (remote.schema_version == local_schema_version) {
+        result.accepted = true;
+        result.negotiated_schema_version = local_schema_version;
+        log_sync_event(
+            SyncLogLevel::Debug,
+            "sync_protocol",
+            "validate_handshake_schema_accepted",
+            "mode=strict negotiated_schema=" + std::to_string(result.negotiated_schema_version));
+        return result;
+    }
+
+    if (!allow_downgrade) {
+        result.error = "schema version mismatch: local=" + std::to_string(local_schema_version) +
+                       " peer=" + std::to_string(remote.schema_version);
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_schema_rejected",
+            result.error);
+        return result;
+    }
+
+    const auto negotiated = std::min(local_schema_version, remote.schema_version);
+    if (negotiated < min_supported_schema_version) {
+        result.error = "no compatible schema version: local=" + std::to_string(local_schema_version) +
+                       " peer=" + std::to_string(remote.schema_version) +
+                       " min_supported=" + std::to_string(min_supported_schema_version);
+        log_sync_event(
+            SyncLogLevel::Warning,
+            "sync_protocol",
+            "validate_handshake_schema_rejected",
+            result.error);
+        return result;
+    }
+
+    result.accepted = true;
+    result.negotiated_schema_version = negotiated;
+    log_sync_event(
+        SyncLogLevel::Info,
+        "sync_protocol",
+        "validate_handshake_schema_accepted",
+        "mode=downgrade negotiated_schema=" + std::to_string(result.negotiated_schema_version) + " local=" +
+            std::to_string(local_schema_version) + " peer=" + std::to_string(remote.schema_version));
+    return result;
 }
 
 std::vector<std::uint8_t> encode_journal_batch(const JournalBatchFrame& frame) {

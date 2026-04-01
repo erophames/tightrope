@@ -1,7 +1,10 @@
 #include "consensus/nuraft_backend.h"
 
+#include <algorithm>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -13,16 +16,18 @@ namespace tightrope::sync::consensus::nuraft_backend {
 class Backend::Impl {
 public:
     Impl(std::uint32_t node_id, std::vector<std::uint32_t> members, std::uint16_t port_base,
-         std::string storage_base_dir)
+         std::string storage_base_dir, BackendOptions options)
         : node_id_(node_id),
           members_(internal::normalize_members(std::move(members))),
           port_base_(port_base),
-          storage_path_(internal::make_storage_path(storage_base_dir, node_id, port_base)) {}
+          storage_path_(internal::make_storage_path(storage_base_dir, node_id, port_base)),
+          options_(std::move(options)) {}
 
     std::uint32_t node_id_ = 0;
     std::vector<std::uint32_t> members_;
     std::uint16_t port_base_ = 26000;
     std::string storage_path_;
+    BackendOptions options_{};
     bool running_ = false;
 
     nuraft::raft_launcher launcher_;
@@ -48,16 +53,33 @@ std::string members_to_string(const std::vector<std::uint32_t>& members) {
     return out;
 }
 
+BackendOptions sanitize_backend_options(BackendOptions options) {
+    options.election_timeout_lower_ms = std::max(options.election_timeout_lower_ms, 1u);
+    options.election_timeout_upper_ms = std::max(options.election_timeout_upper_ms, options.election_timeout_lower_ms);
+    options.heartbeat_interval_ms = std::max(options.heartbeat_interval_ms, 1u);
+    options.rpc_failure_backoff_ms = std::max(options.rpc_failure_backoff_ms, 1u);
+    options.max_append_size = std::max(options.max_append_size, 1u);
+    if (options.thread_pool_size == 0) {
+        const auto hardware = std::thread::hardware_concurrency();
+        options.thread_pool_size = hardware == 0 ? 1u : std::min(hardware, 4u);
+    }
+    options.thread_pool_size = std::max(options.thread_pool_size, 1u);
+    return options;
+}
+
 } // namespace
 
 Backend::Backend(const std::uint32_t node_id, std::vector<std::uint32_t> members, const std::uint16_t port_base,
-                 std::string storage_base_dir)
-    : impl_(new Impl(node_id, std::move(members), port_base, std::move(storage_base_dir))) {}
+                 std::string storage_base_dir, BackendOptions options)
+    : impl_(std::make_unique<Impl>(
+          node_id,
+          std::move(members),
+          port_base,
+          std::move(storage_base_dir),
+          sanitize_backend_options(std::move(options)))) {}
 
 Backend::~Backend() {
     stop();
-    delete impl_;
-    impl_ = nullptr;
 }
 
 bool Backend::start() {
@@ -92,19 +114,22 @@ bool Backend::start() {
     impl_->logger_ = nuraft::cs_new<internal::NoopLogger>();
 
     nuraft::raft_params params;
-    params.with_election_timeout_lower(150)
-        .with_election_timeout_upper(350)
-        .with_hb_interval(75)
-        .with_rpc_failure_backoff(50)
-        .with_max_append_size(64);
+    params.with_election_timeout_lower(impl_->options_.election_timeout_lower_ms)
+        .with_election_timeout_upper(impl_->options_.election_timeout_upper_ms)
+        .with_hb_interval(impl_->options_.heartbeat_interval_ms)
+        .with_rpc_failure_backoff(impl_->options_.rpc_failure_backoff_ms)
+        .with_max_append_size(impl_->options_.max_append_size);
+    // Keep membership reconfiguration non-blocking when peers are introduced before
+    // they have fully joined; NuRaft will track them as new joiners until caught up.
+    params.use_new_joiner_type_ = true;
 
     nuraft::asio_service::options asio_options;
-    asio_options.thread_pool_size_ = 2;
+    asio_options.thread_pool_size_ = impl_->options_.thread_pool_size;
 
     nuraft::raft_server::init_options init_options;
     init_options.skip_initial_election_timeout_ = false;
     init_options.start_server_in_constructor_ = true;
-    init_options.test_mode_flag_ = true;
+    init_options.test_mode_flag_ = impl_->options_.test_mode;
 
     const auto port = static_cast<int>(impl_->port_base_ + impl_->node_id_);
     try {
@@ -269,6 +294,147 @@ std::optional<std::uint64_t> Backend::append_payload(const std::string_view payl
         "node=" + std::to_string(impl_->node_id_) + " index=" + std::to_string(index) + " payload_bytes=" +
             std::to_string(payload.size()));
     return index;
+}
+
+bool Backend::add_server(const std::uint32_t node_id, std::string endpoint, std::string* error) {
+    auto set_error = [&error](std::string message) {
+        if (error != nullptr) {
+            *error = std::move(message);
+        }
+    };
+
+    if (!is_running()) {
+        set_error("raft backend is not running");
+        return false;
+    }
+    if (!impl_->raft_server_->is_leader()) {
+        set_error("raft node is not leader");
+        return false;
+    }
+    if (node_id == 0 || endpoint.empty()) {
+        set_error("invalid membership change request");
+        return false;
+    }
+
+    nuraft::srv_config server_to_add(static_cast<nuraft::int32>(node_id), endpoint);
+    auto result = impl_->raft_server_->add_srv(server_to_add);
+    if (!result || !result->get_accepted()) {
+        const auto detail = result ? result->get_result_str() : std::string("no result");
+        if (detail.find("already exists") != std::string::npos || detail.find("Already exists") != std::string::npos) {
+            impl_->members_ = server_ids();
+            log_consensus_event(
+                ConsensusLogLevel::Info,
+                "nuraft_backend",
+                "add_server_noop_already_exists",
+                "node=" + std::to_string(impl_->node_id_) + " target=" + std::to_string(node_id) + " endpoint=" +
+                    endpoint);
+            return true;
+        }
+        set_error("raft add_srv rejected: " + detail);
+        log_consensus_event(
+            ConsensusLogLevel::Warning,
+            "nuraft_backend",
+            "add_server_rejected",
+            "node=" + std::to_string(impl_->node_id_) + " target=" + std::to_string(node_id) + " endpoint=" +
+                endpoint + " detail=" + detail);
+        return false;
+    }
+    const auto code = result->get_result_code();
+    if (code != nuraft::cmd_result_code::OK && code != nuraft::cmd_result_code::RESULT_NOT_EXIST_YET) {
+        const auto detail = result->get_result_str();
+        set_error("raft add_srv failed: " + detail);
+        return false;
+    }
+
+    impl_->members_ = server_ids();
+    log_consensus_event(
+        ConsensusLogLevel::Info,
+        "nuraft_backend",
+        "add_server_accepted",
+        "node=" + std::to_string(impl_->node_id_) + " target=" + std::to_string(node_id) + " endpoint=" + endpoint);
+    return true;
+}
+
+bool Backend::remove_server(const std::uint32_t node_id, std::string* error) {
+    auto set_error = [&error](std::string message) {
+        if (error != nullptr) {
+            *error = std::move(message);
+        }
+    };
+
+    if (!is_running()) {
+        set_error("raft backend is not running");
+        return false;
+    }
+    if (!impl_->raft_server_->is_leader()) {
+        set_error("raft node is not leader");
+        return false;
+    }
+    if (node_id == 0) {
+        set_error("invalid membership change request");
+        return false;
+    }
+
+    auto result = impl_->raft_server_->remove_srv(static_cast<int>(node_id));
+    if (!result || !result->get_accepted()) {
+        const auto detail = result ? result->get_result_str() : std::string("no result");
+        if (detail.find("Cannot find server") != std::string::npos ||
+            detail.find("cannot find server") != std::string::npos ||
+            detail.find("not found") != std::string::npos) {
+            impl_->members_ = server_ids();
+            log_consensus_event(
+                ConsensusLogLevel::Info,
+                "nuraft_backend",
+                "remove_server_noop_missing",
+                "node=" + std::to_string(impl_->node_id_) + " target=" + std::to_string(node_id));
+            return true;
+        }
+        set_error("raft remove_srv rejected: " + detail);
+        log_consensus_event(
+            ConsensusLogLevel::Warning,
+            "nuraft_backend",
+            "remove_server_rejected",
+            "node=" + std::to_string(impl_->node_id_) + " target=" + std::to_string(node_id) + " detail=" + detail);
+        return false;
+    }
+    const auto code = result->get_result_code();
+    if (code != nuraft::cmd_result_code::OK && code != nuraft::cmd_result_code::RESULT_NOT_EXIST_YET) {
+        const auto detail = result->get_result_str();
+        set_error("raft remove_srv failed: " + detail);
+        return false;
+    }
+
+    impl_->members_ = server_ids();
+    log_consensus_event(
+        ConsensusLogLevel::Info,
+        "nuraft_backend",
+        "remove_server_accepted",
+        "node=" + std::to_string(impl_->node_id_) + " target=" + std::to_string(node_id));
+    return true;
+}
+
+std::vector<std::uint32_t> Backend::server_ids() const {
+    if (!is_running()) {
+        return impl_->members_;
+    }
+
+    std::vector<nuraft::ptr<nuraft::srv_config>> configs;
+    impl_->raft_server_->get_srv_config_all(configs);
+
+    std::vector<std::uint32_t> ids;
+    ids.reserve(configs.size());
+    for (const auto& config : configs) {
+        if (config == nullptr || config->get_id() <= 0) {
+            continue;
+        }
+        ids.push_back(static_cast<std::uint32_t>(config->get_id()));
+    }
+    if (ids.empty()) {
+        return impl_->members_;
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
 }
 
 std::string endpoint_for(const std::uint32_t node_id, const std::uint16_t port_base) {

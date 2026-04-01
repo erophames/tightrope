@@ -39,12 +39,13 @@ LeaderProxyDecision resolve_leader_proxy(const LeaderProxyContext& context) {
     }
 
     log_consensus_event(
-        ConsensusLogLevel::Info,
+        ConsensusLogLevel::Warning,
         "leader_proxy",
-        "forward_to_leader",
-        "local_node=" + std::to_string(context.local_node_id) + " leader=" + std::to_string(context.leader_id)
+        "reject_write",
+        "reason=forwarding_not_implemented local_node=" + std::to_string(context.local_node_id) + " leader=" +
+            std::to_string(context.leader_id)
     );
-    return {.action = LeaderProxyAction::ForwardToLeader, .target_leader_id = context.leader_id};
+    return {.action = LeaderProxyAction::RejectForwardingUnavailable, .target_leader_id = context.leader_id};
 }
 
 } // namespace tightrope::sync::consensus

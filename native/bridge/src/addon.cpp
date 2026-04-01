@@ -1,12 +1,14 @@
 #include <napi.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "internal/addon_bindings_support.h"
@@ -15,6 +17,9 @@ namespace {
 
 namespace support = tightrope::bridge::addon_support;
 using tightrope::bridge::ClusterStatus;
+using tightrope::bridge::PeerState;
+
+constexpr auto kAsyncOperationTimeout = std::chrono::seconds(30);
 
 class AsyncBridgeWorker final : public Napi::AsyncWorker {
 public:
@@ -38,12 +43,48 @@ public:
     }
 
     void Execute() override {
-        try {
-            execute_fn_();
-        } catch (const std::exception& ex) {
-            SetError(ex.what());
-        } catch (...) {
-            SetError(fallback_error_);
+        std::mutex state_mutex;
+        std::condition_variable state_cv;
+        bool done = false;
+        std::optional<std::string> execution_error;
+
+        std::thread worker([this, &state_mutex, &state_cv, &done, &execution_error]() {
+            std::optional<std::string> local_error;
+            try {
+                execute_fn_();
+            } catch (const std::exception& ex) {
+                local_error = ex.what();
+            } catch (...) {
+                local_error = fallback_error_;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(state_mutex);
+                execution_error = std::move(local_error);
+                done = true;
+            }
+            state_cv.notify_one();
+        });
+
+        {
+            std::unique_lock<std::mutex> lock(state_mutex);
+            if (!state_cv.wait_for(lock, kAsyncOperationTimeout, [&done]() {
+                    return done;
+                })) {
+                if (worker.joinable()) {
+                    worker.detach();
+                }
+                SetError("operation timed out after 30000ms");
+                return;
+            }
+        }
+
+        if (worker.joinable()) {
+            worker.join();
+        }
+
+        if (execution_error.has_value()) {
+            SetError(*execution_error);
         }
     }
 
@@ -99,7 +140,12 @@ Napi::Value queue_async_void(
         [operation = std::move(operation), error_message]() {
             std::lock_guard<std::mutex> lock(support::bridge_mutex());
             if (!operation()) {
-                throw std::runtime_error(error_message);
+                auto message = error_message;
+                const auto detail = support::bridge_instance().last_error();
+                if (!detail.empty()) {
+                    message += ": " + detail;
+                }
+                throw std::runtime_error(message);
             }
         },
         [](Napi::Env env) {
@@ -144,7 +190,12 @@ Napi::Value bridge_shutdown(const Napi::CallbackInfo& info) {
 Napi::Value bridge_shutdown_sync(const Napi::CallbackInfo& info) {
     std::lock_guard<std::mutex> lock(support::bridge_mutex());
     if (!support::bridge_instance().shutdown()) {
-        throw std::runtime_error("bridge shutdown failed");
+        auto message = std::string("bridge shutdown failed");
+        const auto detail = support::bridge_instance().last_error();
+        if (!detail.empty()) {
+            message += ": " + detail;
+        }
+        throw std::runtime_error(message);
     }
     support::started_at().reset();
     return info.Env().Undefined();
@@ -158,6 +209,7 @@ Napi::Value is_running(const Napi::CallbackInfo& info) {
 Napi::Value get_health(const Napi::CallbackInfo& info) {
     struct HealthSnapshot {
         bool running = false;
+        bool degraded = false;
         double uptime_ms = 0.0;
     };
 
@@ -172,12 +224,33 @@ Napi::Value get_health(const Napi::CallbackInfo& info) {
                     std::chrono::duration_cast<std::chrono::milliseconds>(now - *support::started_at()).count()
                 );
             }
+
+            const auto cluster = support::bridge_instance().cluster_status();
+            if (snapshot.running && cluster.enabled) {
+                std::size_t connected_nodes = 1; // local node
+                for (const auto& peer : cluster.peers) {
+                    if (peer.state == PeerState::Connected) {
+                        ++connected_nodes;
+                    }
+                }
+                const auto total_nodes = cluster.peers.size() + 1;
+                const auto quorum = (total_nodes / 2) + 1;
+                if (connected_nodes < quorum || !cluster.leader_id.has_value()) {
+                    snapshot.degraded = true;
+                }
+            }
             return snapshot;
         },
         "getHealth failed",
         [](Napi::Env env, const HealthSnapshot& snapshot) {
             auto object = Napi::Object::New(env);
-            object.Set("status", snapshot.running ? "ok" : "error");
+            if (!snapshot.running) {
+                object.Set("status", "error");
+            } else if (snapshot.degraded) {
+                object.Set("status", "degraded");
+            } else {
+                object.Set("status", "ok");
+            }
             object.Set("uptime_ms", Napi::Number::New(env, snapshot.uptime_ms));
             return object;
         }

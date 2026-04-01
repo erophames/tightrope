@@ -9,12 +9,9 @@
 #include <vector>
 
 #include "membership.h"
+#include "nuraft_backend.h"
 
 namespace tightrope::sync::consensus {
-
-namespace nuraft_backend {
-class Backend;
-}
 
 enum class RaftRole { Follower, Candidate, Leader };
 
@@ -41,8 +38,10 @@ struct LogEntryData {
 
 class RaftNode {
 public:
+    using BackendOptions = nuraft_backend::BackendOptions;
+
     RaftNode(std::uint32_t node_id, std::vector<std::uint32_t> peers, std::uint16_t port_base = 26000,
-             std::string storage_base_dir = "");
+             std::string storage_base_dir = "", BackendOptions backend_options = {});
     ~RaftNode();
 
     RaftNode(const RaftNode&) = delete;
@@ -57,6 +56,8 @@ public:
 
     void start_election();
     std::optional<std::uint64_t> propose(const LogEntryData& data);
+    [[nodiscard]] bool add_member(std::uint32_t node_id, std::string endpoint, std::string* error = nullptr);
+    [[nodiscard]] bool remove_member(std::uint32_t node_id, std::string* error = nullptr);
     [[nodiscard]] std::uint64_t maybe_advance_commit() const;
     [[nodiscard]] std::uint64_t last_log_index() const;
     [[nodiscard]] std::size_t committed_entries() const;

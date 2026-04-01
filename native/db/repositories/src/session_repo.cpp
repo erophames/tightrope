@@ -126,5 +126,21 @@ std::size_t purge_expired_proxy_sticky_sessions(sqlite3* db, const std::int64_t 
     }
 }
 
-} // namespace tightrope::db
+std::size_t purge_proxy_sticky_sessions_for_account(sqlite3* db, const std::string_view account_id) noexcept {
+    auto handle = sqlite_repo_utils::resolve_database(db);
+    if (!handle.valid() || account_id.empty() || !ensure_schema(*handle.db)) {
+        return 0;
+    }
 
+    constexpr const char* kSql = "DELETE FROM proxy_sticky_sessions WHERE account_id = ?1;";
+    try {
+        SQLite::Statement stmt(*handle.db, kSql);
+        stmt.bind(1, std::string(account_id));
+        (void)stmt.exec();
+        return static_cast<std::size_t>(handle.db->getChanges());
+    } catch (...) {
+        return 0;
+    }
+}
+
+} // namespace tightrope::db

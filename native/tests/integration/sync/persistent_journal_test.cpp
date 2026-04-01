@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <unistd.h>
 
@@ -29,6 +31,17 @@ sqlite3* open_db(const std::string& path) {
     return db;
 }
 
+void exec_sql(sqlite3* db, const std::string& sql) {
+    REQUIRE(db != nullptr);
+    char* error = nullptr;
+    const auto rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &error);
+    if (error != nullptr) {
+        INFO(std::string(error));
+        sqlite3_free(error);
+    }
+    REQUIRE(rc == SQLITE_OK);
+}
+
 tightrope::sync::PendingJournalEntry make_pending(
     const std::uint64_t wall,
     const std::uint32_t counter,
@@ -51,6 +64,31 @@ tightrope::sync::PendingJournalEntry make_pending(
     entry.batch_id = std::move(batch_id);
     return entry;
 }
+
+class EnvVarGuard final {
+public:
+    explicit EnvVarGuard(std::string name) : name_(std::move(name)) {
+        if (const char* existing = std::getenv(name_.c_str()); existing != nullptr) {
+            original_ = std::string(existing);
+        }
+    }
+
+    ~EnvVarGuard() {
+        if (original_.has_value()) {
+            (void)setenv(name_.c_str(), original_->c_str(), 1);
+            return;
+        }
+        (void)unsetenv(name_.c_str());
+    }
+
+    void set(const std::string& value) const {
+        REQUIRE(setenv(name_.c_str(), value.c_str(), 1) == 0);
+    }
+
+private:
+    std::string name_;
+    std::optional<std::string> original_{};
+};
 
 } // namespace
 
@@ -123,6 +161,58 @@ TEST_CASE("persistent journal entries_after returns subset by seq", "[sync][pjou
     std::remove(path.c_str());
 }
 
+TEST_CASE(
+    "persistent journal entries_after rejects corrupted rows when checksum verification is enabled",
+    "[sync][pjournal][integration]"
+) {
+    EnvVarGuard verify_guard{"TIGHTROPE_SYNC_JOURNAL_VERIFY_CHECKSUM_ON_READ"};
+    verify_guard.set("1");
+
+    const auto path = make_temp_db_path();
+    auto* db = open_db(path);
+
+    tightrope::sync::PersistentJournal journal(db);
+    const auto entry = journal.append(make_pending(100, 1, 7));
+    REQUIRE(entry.has_value());
+
+    exec_sql(
+        db,
+        "UPDATE _sync_journal SET checksum = 'bad-checksum' WHERE seq = " + std::to_string(entry->seq) + ";");
+
+    const auto entries = journal.entries_after(0);
+    REQUIRE(entries.empty());
+
+    sqlite3_close(db);
+    std::remove(path.c_str());
+}
+
+TEST_CASE(
+    "persistent journal entries_after can read rows when checksum verification is disabled",
+    "[sync][pjournal][integration]"
+) {
+    EnvVarGuard verify_guard{"TIGHTROPE_SYNC_JOURNAL_VERIFY_CHECKSUM_ON_READ"};
+    verify_guard.set("0");
+
+    const auto path = make_temp_db_path();
+    auto* db = open_db(path);
+
+    tightrope::sync::PersistentJournal journal(db);
+    const auto entry = journal.append(make_pending(100, 1, 7));
+    REQUIRE(entry.has_value());
+
+    exec_sql(
+        db,
+        "UPDATE _sync_journal SET checksum = 'bad-checksum' WHERE seq = " + std::to_string(entry->seq) + ";");
+
+    const auto entries = journal.entries_after(0);
+    REQUIRE(entries.size() == 1);
+    REQUIRE(entries.front().seq == entry->seq);
+    REQUIRE(entries.front().checksum == "bad-checksum");
+
+    sqlite3_close(db);
+    std::remove(path.c_str());
+}
+
 TEST_CASE("persistent journal rollback_batch removes correct entries", "[sync][pjournal][integration]") {
     const auto path = make_temp_db_path();
     auto* db = open_db(path);
@@ -188,6 +278,54 @@ TEST_CASE("persistent journal compact removes old acknowledged entries", "[sync]
     const auto remaining = journal.entries_after(0);
     REQUIRE(remaining.size() == 1);
     REQUIRE(remaining[0].seq == e3->seq);
+
+    sqlite3_close(db);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("persistent journal compact keeps database writable", "[sync][pjournal][integration]") {
+    const auto path = make_temp_db_path();
+    auto* db = open_db(path);
+
+    tightrope::sync::PersistentJournal journal(db);
+    const auto e1 = journal.append(make_pending(100, 1, 7));
+    const auto e2 = journal.append(make_pending(200, 2, 7));
+    REQUIRE(e1.has_value());
+    REQUIRE(e2.has_value());
+
+    REQUIRE(journal.compact(250, e2->seq) == 2);
+    const auto appended_after_compact = journal.append(make_pending(300, 3, 7));
+    REQUIRE(appended_after_compact.has_value());
+    REQUIRE(journal.size() == 1);
+
+    sqlite3_close(db);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("persistent journal append triggers auto compaction when threshold is reached", "[sync][pjournal][integration]") {
+    EnvVarGuard enabled_guard{"TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_ENABLED"};
+    EnvVarGuard min_entries_guard{"TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_MIN_ENTRIES"};
+    EnvVarGuard interval_guard{"TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_INTERVAL"};
+    EnvVarGuard retention_guard{"TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_RETENTION_MS"};
+    EnvVarGuard min_applied_guard{"TIGHTROPE_SYNC_JOURNAL_AUTO_COMPACT_MIN_APPLIED"};
+    enabled_guard.set("1");
+    min_entries_guard.set("3");
+    interval_guard.set("1");
+    retention_guard.set("0");
+    min_applied_guard.set("1");
+
+    const auto path = make_temp_db_path();
+    auto* db = open_db(path);
+
+    tightrope::sync::PersistentJournal journal(db);
+    REQUIRE(journal.append(make_pending(100, 1, 7)).has_value());
+    REQUIRE(journal.append(make_pending(200, 2, 7)).has_value());
+    REQUIRE(journal.append(make_pending(300, 3, 7)).has_value());
+
+    REQUIRE(journal.size() == 1);
+    const auto remaining = journal.entries_after(0);
+    REQUIRE(remaining.size() == 1);
+    REQUIRE(remaining[0].hlc.wall == 300);
 
     sqlite3_close(db);
     std::remove(path.c_str());

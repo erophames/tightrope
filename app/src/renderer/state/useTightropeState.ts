@@ -105,6 +105,7 @@ const defaultDashboardSettings: DashboardSettings = {
   routingScoreZeta: 0.05,
   routingScoreEta: 1,
   routingSuccessRateRho: 2,
+  routingPlanModelPricingUsdPerMillion: '',
   syncClusterName: 'default',
   syncSiteId: 1,
   syncPort: 9400,
@@ -113,6 +114,22 @@ const defaultDashboardSettings: DashboardSettings = {
   syncConflictResolution: 'lww',
   syncJournalRetentionDays: 30,
   syncTlsEnabled: true,
+  syncRequireHandshakeAuth: true,
+  syncClusterSharedSecret: '',
+  syncTlsVerifyPeer: true,
+  syncTlsCaCertificatePath: '',
+  syncTlsCertificateChainPath: '',
+  syncTlsPrivateKeyPath: '',
+  syncTlsPinnedPeerCertificateSha256: '',
+  syncSchemaVersion: 1,
+  syncMinSupportedSchemaVersion: 1,
+  syncAllowSchemaDowngrade: false,
+  syncPeerProbeEnabled: true,
+  syncPeerProbeIntervalMs: 5000,
+  syncPeerProbeTimeoutMs: 500,
+  syncPeerProbeMaxPerRefresh: 2,
+  syncPeerProbeFailClosed: true,
+  syncPeerProbeFailClosedFailures: 3,
 };
 
 const emptyClusterStatus: ClusterStatus = {
@@ -124,6 +141,45 @@ const emptyClusterStatus: ClusterStatus = {
   commit_index: 0,
   leader_id: null,
   peers: [],
+  replication_lagging_peers: 0,
+  replication_lag_total_entries: 0,
+  replication_lag_max_entries: 0,
+  replication_lag_avg_entries: 0,
+  replication_lag_ewma_entries: 0,
+  replication_lag_ewma_samples: 0,
+  replication_lag_alert_threshold_entries: 0,
+  replication_lag_alert_sustained_refreshes: 0,
+  replication_lag_alert_streak: 0,
+  replication_lag_alert_active: false,
+  replication_lag_last_alert_at: null,
+  ingress_socket_accept_failures: 0,
+  ingress_socket_accepted_connections: 0,
+  ingress_socket_completed_connections: 0,
+  ingress_socket_failed_connections: 0,
+  ingress_socket_active_connections: 0,
+  ingress_socket_peak_active_connections: 0,
+  ingress_socket_tls_handshake_failures: 0,
+  ingress_socket_read_failures: 0,
+  ingress_socket_apply_failures: 0,
+  ingress_socket_handshake_ack_failures: 0,
+  ingress_socket_bytes_read: 0,
+  ingress_socket_total_connection_duration_ms: 0,
+  ingress_socket_last_connection_duration_ms: 0,
+  ingress_socket_max_connection_duration_ms: 0,
+  ingress_socket_connection_duration_ewma_ms: 0,
+  ingress_socket_connection_duration_le_10ms: 0,
+  ingress_socket_connection_duration_le_50ms: 0,
+  ingress_socket_connection_duration_le_250ms: 0,
+  ingress_socket_connection_duration_le_1000ms: 0,
+  ingress_socket_connection_duration_gt_1000ms: 0,
+  ingress_socket_max_buffered_bytes: 0,
+  ingress_socket_max_queued_frames: 0,
+  ingress_socket_max_queued_payload_bytes: 0,
+  ingress_socket_paused_read_cycles: 0,
+  ingress_socket_paused_read_sleep_ms: 0,
+  ingress_socket_last_connection_at: null,
+  ingress_socket_last_failure_at: null,
+  ingress_socket_last_failure_error: null,
   journal_entries: 0,
   pending_raft_entries: 0,
   last_sync_at: null,
@@ -156,6 +212,7 @@ function makeSettingsUpdate(settings: DashboardSettings): DashboardSettingsUpdat
     routingScoreZeta: settings.routingScoreZeta,
     routingScoreEta: settings.routingScoreEta,
     routingSuccessRateRho: settings.routingSuccessRateRho,
+    routingPlanModelPricingUsdPerMillion: settings.routingPlanModelPricingUsdPerMillion,
     syncClusterName: settings.syncClusterName,
     syncSiteId: settings.syncSiteId,
     syncPort: settings.syncPort,
@@ -164,6 +221,22 @@ function makeSettingsUpdate(settings: DashboardSettings): DashboardSettingsUpdat
     syncConflictResolution: settings.syncConflictResolution,
     syncJournalRetentionDays: settings.syncJournalRetentionDays,
     syncTlsEnabled: settings.syncTlsEnabled,
+    syncRequireHandshakeAuth: settings.syncRequireHandshakeAuth,
+    syncClusterSharedSecret: settings.syncClusterSharedSecret,
+    syncTlsVerifyPeer: settings.syncTlsVerifyPeer,
+    syncTlsCaCertificatePath: settings.syncTlsCaCertificatePath,
+    syncTlsCertificateChainPath: settings.syncTlsCertificateChainPath,
+    syncTlsPrivateKeyPath: settings.syncTlsPrivateKeyPath,
+    syncTlsPinnedPeerCertificateSha256: settings.syncTlsPinnedPeerCertificateSha256,
+    syncSchemaVersion: settings.syncSchemaVersion,
+    syncMinSupportedSchemaVersion: settings.syncMinSupportedSchemaVersion,
+    syncAllowSchemaDowngrade: settings.syncAllowSchemaDowngrade,
+    syncPeerProbeEnabled: settings.syncPeerProbeEnabled,
+    syncPeerProbeIntervalMs: settings.syncPeerProbeIntervalMs,
+    syncPeerProbeTimeoutMs: settings.syncPeerProbeTimeoutMs,
+    syncPeerProbeMaxPerRefresh: settings.syncPeerProbeMaxPerRefresh,
+    syncPeerProbeFailClosed: settings.syncPeerProbeFailClosed,
+    syncPeerProbeFailClosedFailures: settings.syncPeerProbeFailClosedFailures,
   };
 }
 
@@ -1818,6 +1891,10 @@ export function useTightropeState() {
     void persistDashboardSettingsPatch({ openaiCacheAffinityMaxAgeSeconds: Math.max(1, seconds) });
   }
 
+  function setRoutingPlanModelPricingUsdPerMillion(value: string): void {
+    void persistDashboardSettingsPatch({ routingPlanModelPricingUsdPerMillion: value.trim() });
+  }
+
   function setSyncClusterName(clusterName: string): void {
     const value = clusterName.trim() === '' ? 'default' : clusterName.trim();
     const patch = { syncClusterName: value };
@@ -1859,7 +1936,119 @@ export function useTightropeState() {
   }
 
   function setSyncTlsEnabled(enabled: boolean): void {
-    void persistDashboardSettingsPatch({ syncTlsEnabled: enabled });
+    const patch = { syncTlsEnabled: enabled };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncRequireHandshakeAuth(enabled: boolean): void {
+    const patch = { syncRequireHandshakeAuth: enabled };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncClusterSharedSecret(secret: string): void {
+    const patch = { syncClusterSharedSecret: secret };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncTlsVerifyPeer(enabled: boolean): void {
+    const patch = { syncTlsVerifyPeer: enabled };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncTlsCaCertificatePath(path: string): void {
+    const patch = { syncTlsCaCertificatePath: path.trim() };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncTlsCertificateChainPath(path: string): void {
+    const patch = { syncTlsCertificateChainPath: path.trim() };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncTlsPrivateKeyPath(path: string): void {
+    const patch = { syncTlsPrivateKeyPath: path.trim() };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncTlsPinnedPeerCertificateSha256(value: string): void {
+    const patch = { syncTlsPinnedPeerCertificateSha256: value.trim() };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncSchemaVersion(version: number): void {
+    const bounded = Math.min(1_000_000, Math.max(1, Math.trunc(version)));
+    const patch = {
+      syncSchemaVersion: bounded,
+      syncMinSupportedSchemaVersion: Math.min(
+        dashboardSettingsRef.current.syncMinSupportedSchemaVersion,
+        bounded,
+      ),
+    };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncMinSupportedSchemaVersion(version: number): void {
+    const bounded = Math.min(1_000_000, Math.max(1, Math.trunc(version)));
+    const patch = {
+      syncMinSupportedSchemaVersion: Math.min(bounded, dashboardSettingsRef.current.syncSchemaVersion),
+    };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncAllowSchemaDowngrade(enabled: boolean): void {
+    const patch = { syncAllowSchemaDowngrade: enabled };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncPeerProbeEnabled(enabled: boolean): void {
+    const patch = { syncPeerProbeEnabled: enabled };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncPeerProbeIntervalMs(value: number): void {
+    const bounded = Math.min(300_000, Math.max(100, Math.trunc(value)));
+    const patch = { syncPeerProbeIntervalMs: bounded };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncPeerProbeTimeoutMs(value: number): void {
+    const bounded = Math.min(60_000, Math.max(50, Math.trunc(value)));
+    const patch = { syncPeerProbeTimeoutMs: bounded };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncPeerProbeMaxPerRefresh(value: number): void {
+    const bounded = Math.min(64, Math.max(1, Math.trunc(value)));
+    const patch = { syncPeerProbeMaxPerRefresh: bounded };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncPeerProbeFailClosed(enabled: boolean): void {
+    const patch = { syncPeerProbeFailClosed: enabled };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
+  }
+
+  function setSyncPeerProbeFailClosedFailures(value: number): void {
+    const bounded = Math.min(1000, Math.max(1, Math.trunc(value)));
+    const patch = { syncPeerProbeFailClosedFailures: bounded };
+    void persistDashboardSettingsPatch(patch);
+    void reconfigureSyncCluster(patch);
   }
 
   function setFirewallDraft(value: string): void {
@@ -1903,6 +2092,23 @@ export function useTightropeState() {
     site_id: number;
     sync_port: number;
     discovery_enabled: boolean;
+    require_handshake_auth: boolean;
+    cluster_shared_secret: string;
+    tls_enabled: boolean;
+    tls_verify_peer: boolean;
+    tls_ca_certificate_path: string;
+    tls_certificate_chain_path: string;
+    tls_private_key_path: string;
+    tls_pinned_peer_certificate_sha256: string;
+    sync_schema_version: number;
+    min_supported_sync_schema_version: number;
+    allow_schema_downgrade: boolean;
+    peer_probe_enabled: boolean;
+    peer_probe_interval_ms: number;
+    peer_probe_timeout_ms: number;
+    peer_probe_max_per_refresh: number;
+    peer_probe_fail_closed: boolean;
+    peer_probe_fail_closed_failures: number;
     manual_peers: string[];
   } {
     return {
@@ -1910,6 +2116,23 @@ export function useTightropeState() {
       site_id: settings.syncSiteId,
       sync_port: settings.syncPort,
       discovery_enabled: settings.syncDiscoveryEnabled,
+      require_handshake_auth: settings.syncRequireHandshakeAuth,
+      cluster_shared_secret: settings.syncClusterSharedSecret,
+      tls_enabled: settings.syncTlsEnabled,
+      tls_verify_peer: settings.syncTlsVerifyPeer,
+      tls_ca_certificate_path: settings.syncTlsCaCertificatePath,
+      tls_certificate_chain_path: settings.syncTlsCertificateChainPath,
+      tls_private_key_path: settings.syncTlsPrivateKeyPath,
+      tls_pinned_peer_certificate_sha256: settings.syncTlsPinnedPeerCertificateSha256,
+      sync_schema_version: settings.syncSchemaVersion,
+      min_supported_sync_schema_version: settings.syncMinSupportedSchemaVersion,
+      allow_schema_downgrade: settings.syncAllowSchemaDowngrade,
+      peer_probe_enabled: settings.syncPeerProbeEnabled,
+      peer_probe_interval_ms: settings.syncPeerProbeIntervalMs,
+      peer_probe_timeout_ms: settings.syncPeerProbeTimeoutMs,
+      peer_probe_max_per_refresh: settings.syncPeerProbeMaxPerRefresh,
+      peer_probe_fail_closed: settings.syncPeerProbeFailClosed,
+      peer_probe_fail_closed_failures: settings.syncPeerProbeFailClosedFailures,
       manual_peers: manualPeers,
     };
   }
@@ -2437,6 +2660,7 @@ export function useTightropeState() {
     setStickyThreadsEnabled,
     setPreferEarlierResetAccounts,
     setOpenaiCacheAffinityMaxAgeSeconds,
+    setRoutingPlanModelPricingUsdPerMillion,
     setFirewallDraft,
     addFirewallIpAddress,
     removeFirewallIpAddress,
@@ -2452,6 +2676,22 @@ export function useTightropeState() {
     setSyncConflictResolution,
     setSyncJournalRetentionDays,
     setSyncTlsEnabled,
+    setSyncRequireHandshakeAuth,
+    setSyncClusterSharedSecret,
+    setSyncTlsVerifyPeer,
+    setSyncTlsCaCertificatePath,
+    setSyncTlsCertificateChainPath,
+    setSyncTlsPrivateKeyPath,
+    setSyncTlsPinnedPeerCertificateSha256,
+    setSyncSchemaVersion,
+    setSyncMinSupportedSchemaVersion,
+    setSyncAllowSchemaDowngrade,
+    setSyncPeerProbeEnabled,
+    setSyncPeerProbeIntervalMs,
+    setSyncPeerProbeTimeoutMs,
+    setSyncPeerProbeMaxPerRefresh,
+    setSyncPeerProbeFailClosed,
+    setSyncPeerProbeFailClosedFailures,
     triggerSyncNow,
     setTheme,
     openBackendDialog,

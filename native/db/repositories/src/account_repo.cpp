@@ -1,5 +1,6 @@
 #include "account_repo.h"
 
+#include <SQLiteCpp/Column.h>
 #include <SQLiteCpp/Database.h>
 #include <SQLiteCpp/Statement.h>
 
@@ -11,6 +12,7 @@
 
 #include "sqlite_repo_utils.h"
 #include "text/ascii.h"
+#include "token_store.h"
 
 namespace tightrope::db {
 
@@ -45,6 +47,25 @@ constexpr const char* kAddQuotaPrimaryPercentSql = "ALTER TABLE accounts ADD COL
 constexpr const char* kAddQuotaSecondaryPercentSql = "ALTER TABLE accounts ADD COLUMN quota_secondary_percent INTEGER;";
 constexpr const char* kAddTelemetryRefreshedAtSql =
     "ALTER TABLE accounts ADD COLUMN usage_telemetry_refreshed_at TEXT;";
+constexpr const char* kUpdateAccessTokenByIdSql = R"SQL(
+UPDATE accounts
+SET access_token_encrypted = ?1,
+    updated_at = datetime('now')
+WHERE id = ?2;
+)SQL";
+constexpr const char* kSelectAccountTokensForMigrationSql = R"SQL(
+SELECT id, access_token_encrypted, refresh_token_encrypted, id_token_encrypted
+FROM accounts
+ORDER BY id ASC;
+)SQL";
+constexpr const char* kUpdateAccountTokensByIdSql = R"SQL(
+UPDATE accounts
+SET access_token_encrypted = ?1,
+    refresh_token_encrypted = ?2,
+    id_token_encrypted = ?3,
+    updated_at = datetime('now')
+WHERE id = ?4;
+)SQL";
 
 bool ensure_schema(SQLite::Database& db) noexcept {
     if (!sqlite_repo_utils::exec_sql(db, kEnsureAccountsSchemaSql)) {
@@ -83,6 +104,35 @@ std::optional<AccountRecord> read_account_row(SQLite::Statement& stmt) {
         record.status = stmt.getColumn(3).getString();
     }
     return record;
+}
+
+std::optional<std::string> normalize_access_token_storage(
+    SQLite::Database& db,
+    const std::int64_t account_id,
+    const std::string& stored_token
+) {
+    bool migrated = false;
+    std::string migration_error;
+    const auto normalized = ::tightrope::auth::crypto::migrate_plaintext_token_for_storage(
+        stored_token,
+        &migrated,
+        &migration_error
+    );
+    if (!normalized.has_value()) {
+        return std::nullopt;
+    }
+
+    if (migrated) {
+        try {
+            SQLite::Statement update_stmt(db, kUpdateAccessTokenByIdSql);
+            update_stmt.bind(1, *normalized);
+            update_stmt.bind(2, account_id);
+            (void)update_stmt.exec();
+        } catch (...) {
+            return std::nullopt;
+        }
+    }
+    return normalized;
 }
 
 } // namespace
@@ -173,6 +223,23 @@ std::optional<AccountRecord> upsert_oauth_account(sqlite3* db, const OauthAccoun
         return std::nullopt;
     }
 
+    std::string token_error;
+    const auto access_token_encrypted =
+        ::tightrope::auth::crypto::encrypt_token_for_storage(account.access_token_encrypted, &token_error);
+    if (!access_token_encrypted.has_value()) {
+        return std::nullopt;
+    }
+    const auto refresh_token_encrypted =
+        ::tightrope::auth::crypto::encrypt_token_for_storage(account.refresh_token_encrypted, &token_error);
+    if (!refresh_token_encrypted.has_value()) {
+        return std::nullopt;
+    }
+    const auto id_token_encrypted =
+        ::tightrope::auth::crypto::encrypt_token_for_storage(account.id_token_encrypted, &token_error);
+    if (!id_token_encrypted.has_value()) {
+        return std::nullopt;
+    }
+
     constexpr const char* kFindSql = "SELECT id FROM accounts WHERE email = ?1 AND provider = ?2 LIMIT 1;";
     constexpr const char* kInsertSql = R"SQL(
 INSERT INTO accounts(
@@ -222,9 +289,9 @@ WHERE id = ?6;
             insert_stmt.bind(2, account.provider);
             sqlite_repo_utils::bind_optional_text(insert_stmt, 3, account.chatgpt_account_id);
             sqlite_repo_utils::bind_optional_text(insert_stmt, 4, account.plan_type);
-            insert_stmt.bind(5, account.access_token_encrypted);
-            insert_stmt.bind(6, account.refresh_token_encrypted);
-            insert_stmt.bind(7, account.id_token_encrypted);
+            insert_stmt.bind(5, *access_token_encrypted);
+            insert_stmt.bind(6, *refresh_token_encrypted);
+            insert_stmt.bind(7, *id_token_encrypted);
             if (insert_stmt.exec() <= 0) {
                 return std::nullopt;
             }
@@ -233,9 +300,9 @@ WHERE id = ?6;
             SQLite::Statement update_stmt(*handle.db, kUpdateSql);
             sqlite_repo_utils::bind_optional_text(update_stmt, 1, account.chatgpt_account_id);
             sqlite_repo_utils::bind_optional_text(update_stmt, 2, account.plan_type);
-            update_stmt.bind(3, account.access_token_encrypted);
-            update_stmt.bind(4, account.refresh_token_encrypted);
-            update_stmt.bind(5, account.id_token_encrypted);
+            update_stmt.bind(3, *access_token_encrypted);
+            update_stmt.bind(4, *refresh_token_encrypted);
+            update_stmt.bind(5, *id_token_encrypted);
             update_stmt.bind(6, *existing_id);
             (void)update_stmt.exec();
             account_id = *existing_id;
@@ -320,17 +387,149 @@ LIMIT 1;
             return std::nullopt;
         }
         auto account = stmt.getColumn(0).getString();
-        auto token = stmt.getColumn(1).getString();
+        const auto stored_token = stmt.getColumn(1).getString();
         account = core::text::trim_ascii(account);
-        token = core::text::trim_ascii(token);
+        auto token = core::text::trim_ascii(stored_token);
         if (account.empty() || token.empty()) {
             return std::nullopt;
         }
+
+        const auto normalized_storage = normalize_access_token_storage(*handle.db, account_id, std::string(token));
+        if (!normalized_storage.has_value()) {
+            return std::nullopt;
+        }
+
+        std::string token_error;
+        auto decrypted = ::tightrope::auth::crypto::decrypt_token_from_storage(*normalized_storage, &token_error);
+        if (!decrypted.has_value()) {
+            return std::nullopt;
+        }
+        token = core::text::trim_ascii(*decrypted);
+        if (token.empty()) {
+            return std::nullopt;
+        }
+
         return AccountUsageCredentials{
             .chatgpt_account_id = std::move(account),
             .access_token = std::move(token),
         };
     } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<TokenStorageMigrationResult> migrate_plaintext_account_tokens(sqlite3* db, const bool dry_run) noexcept {
+    auto handle = sqlite_repo_utils::resolve_database(db);
+    if (!handle.valid() || !ensure_schema(*handle.db)) {
+        return std::nullopt;
+    }
+
+    TokenStorageMigrationResult result{};
+    try {
+        SQLite::Statement select_stmt(*handle.db, kSelectAccountTokensForMigrationSql);
+        SQLite::Statement update_stmt(*handle.db, kUpdateAccountTokensByIdSql);
+        if (!dry_run) {
+            (void)handle.db->exec("BEGIN IMMEDIATE;");
+        }
+
+        while (select_stmt.executeStep()) {
+            ++result.scanned_accounts;
+            const auto account_id = select_stmt.getColumn(0).getInt64();
+
+            auto access_stored = sqlite_repo_utils::optional_text(select_stmt.getColumn(1));
+            auto refresh_stored = sqlite_repo_utils::optional_text(select_stmt.getColumn(2));
+            auto id_stored = sqlite_repo_utils::optional_text(select_stmt.getColumn(3));
+
+            bool account_has_plaintext = false;
+            std::int64_t plaintext_tokens_for_account = 0;
+            const auto note_plaintext = [&account_has_plaintext, &plaintext_tokens_for_account](
+                                            const std::optional<std::string>& stored_value
+                                        ) {
+                if (!stored_value.has_value() || stored_value->empty()) {
+                    return;
+                }
+                if (::tightrope::auth::crypto::token_storage_value_is_encrypted(*stored_value)) {
+                    return;
+                }
+                account_has_plaintext = true;
+                ++plaintext_tokens_for_account;
+            };
+            note_plaintext(access_stored);
+            note_plaintext(refresh_stored);
+            note_plaintext(id_stored);
+            if (account_has_plaintext) {
+                ++result.plaintext_accounts;
+                result.plaintext_tokens += plaintext_tokens_for_account;
+            }
+            if (dry_run) {
+                continue;
+            }
+
+            bool account_migrated = false;
+            bool account_failed = false;
+            std::int64_t migrated_tokens_for_account = 0;
+
+            const auto migrate_token = [&account_migrated, &account_failed, &migrated_tokens_for_account](
+                                           std::optional<std::string>* stored_value
+                                       ) {
+                if (stored_value == nullptr || !stored_value->has_value() || stored_value->value().empty()) {
+                    return;
+                }
+                bool migrated = false;
+                std::string migration_error;
+                auto migrated_value = ::tightrope::auth::crypto::migrate_plaintext_token_for_storage(
+                    stored_value->value(),
+                    &migrated,
+                    &migration_error
+                );
+                if (!migrated_value.has_value()) {
+                    account_failed = true;
+                    return;
+                }
+                *stored_value = *migrated_value;
+                if (migrated) {
+                    account_migrated = true;
+                    ++migrated_tokens_for_account;
+                }
+            };
+
+            migrate_token(&access_stored);
+            migrate_token(&refresh_stored);
+            migrate_token(&id_stored);
+            if (account_failed) {
+                ++result.failed_accounts;
+                continue;
+            }
+            if (!account_migrated) {
+                continue;
+            }
+
+            update_stmt.reset();
+            update_stmt.clearBindings();
+            if (!sqlite_repo_utils::bind_optional_text(update_stmt, 1, access_stored) ||
+                !sqlite_repo_utils::bind_optional_text(update_stmt, 2, refresh_stored) ||
+                !sqlite_repo_utils::bind_optional_text(update_stmt, 3, id_stored)) {
+                ++result.failed_accounts;
+                continue;
+            }
+            update_stmt.bind(4, account_id);
+            (void)update_stmt.exec();
+
+            ++result.migrated_accounts;
+            result.migrated_tokens += migrated_tokens_for_account;
+        }
+
+        if (!dry_run) {
+            (void)handle.db->exec("COMMIT;");
+        }
+        return result;
+    } catch (...) {
+        try {
+            if (!dry_run) {
+                (void)handle.db->exec("ROLLBACK;");
+            }
+        } catch (...) {
+        }
         return std::nullopt;
     }
 }

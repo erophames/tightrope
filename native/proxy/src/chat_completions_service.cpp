@@ -974,6 +974,12 @@ struct ToolCallDelta {
     std::optional<std::string> call_id;
     std::optional<std::string> name;
     std::optional<std::string> arguments;
+    enum class ArgumentsMode {
+        Unknown,
+        Delta,
+        Snapshot,
+    };
+    ArgumentsMode arguments_mode = ArgumentsMode::Unknown;
     std::optional<std::string> tool_type;
 };
 
@@ -1010,6 +1016,8 @@ struct ToolCallState {
     std::size_t index = 0;
     std::optional<std::string> call_id;
     std::optional<std::string> name;
+    std::optional<std::string> emitted_call_id;
+    std::optional<std::string> emitted_name;
     std::string arguments;
     std::string tool_type = "function";
 };
@@ -1038,6 +1046,40 @@ bool contains_tool_fields(const JsonObject& object) {
     return object.find("call_id") != object.end() || object.find("tool_call_id") != object.end() ||
            object.find("arguments") != object.end() || object.find("function") != object.end() ||
            object.find("name") != object.end();
+}
+
+ToolCallDelta::ArgumentsMode infer_tool_call_arguments_mode(
+    const JsonObject& event_object,
+    const JsonObject& candidate,
+    const std::optional<std::string>& arguments
+) {
+    if (!arguments.has_value() || arguments->empty()) {
+        return ToolCallDelta::ArgumentsMode::Unknown;
+    }
+
+    const auto event_type = json_string(event_object, "type");
+    if (event_type.has_value()) {
+        if (*event_type == "response.function_call_arguments.delta") {
+            return ToolCallDelta::ArgumentsMode::Delta;
+        }
+        if (*event_type == "response.function_call_arguments.done") {
+            return ToolCallDelta::ArgumentsMode::Snapshot;
+        }
+        if (core::text::starts_with(*event_type, "response.output_item.")) {
+            return ToolCallDelta::ArgumentsMode::Snapshot;
+        }
+        if (event_type->find(".delta") != std::string::npos) {
+            return ToolCallDelta::ArgumentsMode::Delta;
+        }
+        if (event_type->find(".done") != std::string::npos) {
+            return ToolCallDelta::ArgumentsMode::Snapshot;
+        }
+    }
+
+    if (candidate.find("delta") != candidate.end()) {
+        return ToolCallDelta::ArgumentsMode::Delta;
+    }
+    return ToolCallDelta::ArgumentsMode::Snapshot;
 }
 
 bool is_tool_call_event(const JsonObject& object) {
@@ -1167,33 +1209,87 @@ std::optional<ToolCallDelta> extract_tool_call_delta(const Json& payload, ToolCa
         return std::nullopt;
     }
 
+    const auto arguments_mode = infer_tool_call_arguments_mode(object, *candidate, arguments);
+
     return ToolCallDelta{
         .index = indexer.index_for(call_id, name),
         .call_id = call_id,
         .name = name,
         .arguments = arguments,
+        .arguments_mode = arguments_mode,
         .tool_type = tool_type,
     };
 }
 
-void merge_tool_call_delta(std::vector<ToolCallState>& tool_calls, const ToolCallDelta& delta) {
+std::optional<std::string> normalize_tool_call_arguments(ToolCallState& state, const ToolCallDelta& delta) {
+    if (!delta.arguments.has_value() || delta.arguments->empty()) {
+        return std::nullopt;
+    }
+
+    if (delta.arguments_mode == ToolCallDelta::ArgumentsMode::Delta) {
+        state.arguments += *delta.arguments;
+        return delta.arguments;
+    }
+
+    if (state.arguments.empty()) {
+        state.arguments = *delta.arguments;
+        return delta.arguments;
+    }
+    if (state.arguments == *delta.arguments) {
+        return std::nullopt;
+    }
+    if (core::text::starts_with(*delta.arguments, state.arguments)) {
+        const auto suffix = delta.arguments->substr(state.arguments.size());
+        state.arguments = *delta.arguments;
+        if (suffix.empty()) {
+            return std::nullopt;
+        }
+        return suffix;
+    }
+
+    // Snapshots can replay full arguments. If the upstream payload diverges from
+    // already emitted chunks, we keep the latest snapshot but avoid re-emitting
+    // non-appendable data that would corrupt downstream reconstruction.
+    state.arguments = *delta.arguments;
+    return std::nullopt;
+}
+
+std::optional<ToolCallDelta> merge_tool_call_delta(std::vector<ToolCallState>& tool_calls, const ToolCallDelta& delta) {
     while (tool_calls.size() <= delta.index) {
         tool_calls.push_back(ToolCallState{.index = tool_calls.size()});
     }
 
     auto& state = tool_calls[delta.index];
+    ToolCallDelta emitted{
+        .index = delta.index,
+        .arguments_mode = ToolCallDelta::ArgumentsMode::Delta,
+    };
     if (delta.call_id.has_value() && !delta.call_id->empty()) {
         state.call_id = delta.call_id;
+        if (!state.emitted_call_id.has_value() || *state.emitted_call_id != *delta.call_id) {
+            state.emitted_call_id = delta.call_id;
+            emitted.call_id = delta.call_id;
+        }
     }
     if (delta.name.has_value() && !delta.name->empty()) {
         state.name = delta.name;
+        if (!state.emitted_name.has_value() || *state.emitted_name != *delta.name) {
+            state.emitted_name = delta.name;
+            emitted.name = delta.name;
+        }
     }
-    if (delta.arguments.has_value() && !delta.arguments->empty()) {
-        state.arguments += *delta.arguments;
-    }
+    emitted.arguments = normalize_tool_call_arguments(state, delta);
     if (delta.tool_type.has_value() && !delta.tool_type->empty()) {
         state.tool_type = *delta.tool_type;
+        emitted.tool_type = delta.tool_type;
+    } else {
+        emitted.tool_type = state.tool_type;
     }
+
+    if (!emitted.call_id.has_value() && !emitted.name.has_value() && !emitted.arguments.has_value()) {
+        return std::nullopt;
+    }
+    return emitted;
 }
 
 Json tool_call_delta_to_chunk(const ToolCallDelta& delta) {
@@ -1303,6 +1399,7 @@ std::vector<std::string> responses_events_to_chat_events(
     bool sent_role = false;
     bool saw_tool_call = false;
     ToolCallIndex tool_index;
+    std::vector<ToolCallState> tool_states;
 
     for (const auto& event : events) {
         const auto payload = parse_event_json(event);
@@ -1331,12 +1428,16 @@ std::vector<std::string> responses_events_to_chat_events(
         }
 
         if (const auto tool_delta = extract_tool_call_delta(*payload, tool_index); tool_delta.has_value()) {
+            const auto normalized = merge_tool_call_delta(tool_states, *tool_delta);
+            if (!normalized.has_value()) {
+                continue;
+            }
             Json delta = JsonObject{};
             if (!sent_role) {
                 delta["role"] = "assistant";
             }
             Json calls = JsonArray{};
-            calls.get_array().push_back(tool_call_delta_to_chunk(*tool_delta));
+            calls.get_array().push_back(tool_call_delta_to_chunk(*normalized));
             delta["tool_calls"] = std::move(calls);
             const auto chunk = build_chat_chunk_json(chunk_id, model, delta, std::nullopt, include_usage);
             if (chunk.has_value()) {

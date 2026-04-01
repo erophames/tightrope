@@ -36,10 +36,18 @@ struct RequestLogRecord {
     double total_cost = 0.0;
 };
 
+struct AccountRequestCostAggregate {
+    std::int64_t account_id = 0;
+    std::uint64_t requests = 0;
+    double total_cost = 0.0;
+};
+
 [[nodiscard]] bool ensure_request_log_schema(sqlite3* db) noexcept;
 [[nodiscard]] bool append_request_log(sqlite3* db, const RequestLogWrite& log) noexcept;
 [[nodiscard]] std::vector<RequestLogRecord>
 list_recent_request_logs(sqlite3* db, std::size_t limit = 50, std::size_t offset = 0) noexcept;
+[[nodiscard]] std::vector<AccountRequestCostAggregate>
+list_account_request_cost_aggregates(sqlite3* db, std::uint32_t lookback_hours = 24) noexcept;
 [[nodiscard]] std::optional<std::int64_t>
 find_account_id_by_chatgpt_account_id(sqlite3* db, std::string_view chatgpt_account_id) noexcept;
 

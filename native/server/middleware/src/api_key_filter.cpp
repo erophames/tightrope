@@ -12,6 +12,7 @@
 
 #include "api_keys/key_validator.h"
 #include "api_keys/limit_enforcer.h"
+#include "controllers/linearizable_read_guard.h"
 #include "openai/error_envelope.h"
 #include "repositories/account_repo.h"
 #include "repositories/api_key_repo.h"
@@ -116,6 +117,18 @@ AuthDecision validate_proxy_api_key_impl(
         return deny_server("db_unavailable", "Database unavailable");
     }
 
+    const auto settings_guard = controllers::check_linearizable_read_access("dashboard_settings");
+    if (!settings_guard.allow) {
+        return {
+            .allow = false,
+            .status = settings_guard.status,
+            .body = proxy::openai::build_error_envelope(
+                settings_guard.code,
+                settings_guard.message,
+                "server_error"),
+        };
+    }
+
     const auto settings = db::get_dashboard_settings(db);
     if (!settings.has_value()) {
         return deny_server("settings_unavailable", "Failed to load settings");
@@ -127,6 +140,18 @@ AuthDecision validate_proxy_api_key_impl(
     const auto token = extract_bearer_token(find_header_case_insensitive(headers, "authorization"));
     if (!token.has_value()) {
         return deny_auth(401, "Missing API key in Authorization header");
+    }
+
+    const auto key_guard = controllers::check_linearizable_read_access("api_keys");
+    if (!key_guard.allow) {
+        return {
+            .allow = false,
+            .status = key_guard.status,
+            .body = proxy::openai::build_error_envelope(
+                key_guard.code,
+                key_guard.message,
+                "server_error"),
+        };
     }
 
     const auto key_hash = auth::api_keys::hash_key(*token);

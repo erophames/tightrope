@@ -31,14 +31,36 @@ std::string settings_json(const controllers::DashboardSettingsPayload& settings)
            std::to_string(settings.routing_score_delta) + R"(,"routingScoreZeta":)" +
            std::to_string(settings.routing_score_zeta) + R"(,"routingScoreEta":)" +
            std::to_string(settings.routing_score_eta) + R"(,"routingSuccessRateRho":)" +
-           std::to_string(settings.routing_success_rate_rho) + R"(,"syncClusterName":)" +
+           std::to_string(settings.routing_success_rate_rho) +
+           R"(,"routingPlanModelPricingUsdPerMillion":)" +
+           core::text::quote_json_string(settings.routing_plan_model_pricing_usd_per_million) +
+           R"(,"syncClusterName":)" +
            core::text::quote_json_string(settings.sync_cluster_name) + R"(,"syncSiteId":)" +
            std::to_string(settings.sync_site_id) + R"(,"syncPort":)" + std::to_string(settings.sync_port) +
            R"(,"syncDiscoveryEnabled":)" + bool_json(settings.sync_discovery_enabled) +
            R"(,"syncIntervalSeconds":)" + std::to_string(settings.sync_interval_seconds) +
            R"(,"syncConflictResolution":)" + core::text::quote_json_string(settings.sync_conflict_resolution) +
            R"(,"syncJournalRetentionDays":)" + std::to_string(settings.sync_journal_retention_days) +
-           R"(,"syncTlsEnabled":)" + bool_json(settings.sync_tls_enabled) + "}";
+           R"(,"syncTlsEnabled":)" + bool_json(settings.sync_tls_enabled) +
+           R"(,"syncRequireHandshakeAuth":)" + bool_json(settings.sync_require_handshake_auth) +
+           R"(,"syncClusterSharedSecret":)" + core::text::quote_json_string(settings.sync_cluster_shared_secret) +
+           R"(,"syncTlsVerifyPeer":)" + bool_json(settings.sync_tls_verify_peer) +
+           R"(,"syncTlsCaCertificatePath":)" + core::text::quote_json_string(settings.sync_tls_ca_certificate_path) +
+           R"(,"syncTlsCertificateChainPath":)" +
+           core::text::quote_json_string(settings.sync_tls_certificate_chain_path) +
+           R"(,"syncTlsPrivateKeyPath":)" + core::text::quote_json_string(settings.sync_tls_private_key_path) +
+           R"(,"syncTlsPinnedPeerCertificateSha256":)" +
+           core::text::quote_json_string(settings.sync_tls_pinned_peer_certificate_sha256) +
+           R"(,"syncSchemaVersion":)" + std::to_string(settings.sync_schema_version) +
+           R"(,"syncMinSupportedSchemaVersion":)" + std::to_string(settings.sync_min_supported_schema_version) +
+           R"(,"syncAllowSchemaDowngrade":)" + bool_json(settings.sync_allow_schema_downgrade) +
+           R"(,"syncPeerProbeEnabled":)" + bool_json(settings.sync_peer_probe_enabled) +
+           R"(,"syncPeerProbeIntervalMs":)" + std::to_string(settings.sync_peer_probe_interval_ms) +
+           R"(,"syncPeerProbeTimeoutMs":)" + std::to_string(settings.sync_peer_probe_timeout_ms) +
+           R"(,"syncPeerProbeMaxPerRefresh":)" + std::to_string(settings.sync_peer_probe_max_per_refresh) +
+           R"(,"syncPeerProbeFailClosed":)" + bool_json(settings.sync_peer_probe_fail_closed) +
+           R"(,"syncPeerProbeFailClosedFailures":)" + std::to_string(settings.sync_peer_probe_fail_closed_failures) +
+           "}";
 }
 
 } // namespace
@@ -123,6 +145,14 @@ void wire_settings_routes(uWS::App& app) {
                                                           "routing_success_rate_rho"
                                                       );
                                                   });
+            update.routing_plan_model_pricing_usd_per_million =
+                json_string(*parsed, "routingPlanModelPricingUsdPerMillion")
+                    .or_else([&] {
+                        return json_string(
+                            *parsed,
+                            "routing_plan_model_pricing_usd_per_million"
+                        );
+                    });
             update.sync_cluster_name = json_string(*parsed, "syncClusterName")
                                            .or_else([&] { return json_string(*parsed, "sync_cluster_name"); });
             update.sync_site_id = json_int64(*parsed, "syncSiteId")
@@ -150,6 +180,111 @@ void wire_settings_routes(uWS::App& app) {
                                                      });
             update.sync_tls_enabled = json_bool(*parsed, "syncTlsEnabled")
                                           .or_else([&] { return json_bool(*parsed, "sync_tls_enabled"); });
+            update.sync_require_handshake_auth = json_bool(*parsed, "syncRequireHandshakeAuth")
+                                                     .or_else([&] {
+                                                         return json_bool(
+                                                             *parsed,
+                                                             "sync_require_handshake_auth"
+                                                         );
+                                                     });
+            update.sync_cluster_shared_secret = json_string(*parsed, "syncClusterSharedSecret")
+                                                    .or_else([&] {
+                                                        return json_string(
+                                                            *parsed,
+                                                            "sync_cluster_shared_secret"
+                                                        );
+                                                    });
+            update.sync_tls_verify_peer = json_bool(*parsed, "syncTlsVerifyPeer")
+                                              .or_else([&] { return json_bool(*parsed, "sync_tls_verify_peer"); });
+            update.sync_tls_ca_certificate_path = json_string(*parsed, "syncTlsCaCertificatePath")
+                                                      .or_else([&] {
+                                                          return json_string(
+                                                              *parsed,
+                                                              "sync_tls_ca_certificate_path"
+                                                          );
+                                                      });
+            update.sync_tls_certificate_chain_path = json_string(*parsed, "syncTlsCertificateChainPath")
+                                                         .or_else([&] {
+                                                             return json_string(
+                                                                 *parsed,
+                                                                 "sync_tls_certificate_chain_path"
+                                                             );
+                                                         });
+            update.sync_tls_private_key_path = json_string(*parsed, "syncTlsPrivateKeyPath")
+                                                   .or_else([&] {
+                                                       return json_string(
+                                                           *parsed,
+                                                           "sync_tls_private_key_path"
+                                                       );
+                                                   });
+            update.sync_tls_pinned_peer_certificate_sha256 =
+                json_string(*parsed, "syncTlsPinnedPeerCertificateSha256")
+                    .or_else([&] {
+                        return json_string(
+                            *parsed,
+                            "sync_tls_pinned_peer_certificate_sha256"
+                        );
+                    });
+            update.sync_schema_version = json_int64(*parsed, "syncSchemaVersion")
+                                             .or_else([&] { return json_int64(*parsed, "sync_schema_version"); });
+            update.sync_min_supported_schema_version =
+                json_int64(*parsed, "syncMinSupportedSchemaVersion")
+                    .or_else([&] {
+                        return json_int64(
+                            *parsed,
+                            "sync_min_supported_schema_version"
+                        );
+                    });
+            update.sync_allow_schema_downgrade = json_bool(*parsed, "syncAllowSchemaDowngrade")
+                                                     .or_else([&] {
+                                                         return json_bool(
+                                                             *parsed,
+                                                             "sync_allow_schema_downgrade"
+                                                         );
+                                                     });
+            update.sync_peer_probe_enabled = json_bool(*parsed, "syncPeerProbeEnabled")
+                                                 .or_else([&] {
+                                                     return json_bool(
+                                                         *parsed,
+                                                         "sync_peer_probe_enabled"
+                                                     );
+                                                 });
+            update.sync_peer_probe_interval_ms = json_int64(*parsed, "syncPeerProbeIntervalMs")
+                                                     .or_else([&] {
+                                                         return json_int64(
+                                                             *parsed,
+                                                             "sync_peer_probe_interval_ms"
+                                                         );
+                                                     });
+            update.sync_peer_probe_timeout_ms = json_int64(*parsed, "syncPeerProbeTimeoutMs")
+                                                    .or_else([&] {
+                                                        return json_int64(
+                                                            *parsed,
+                                                            "sync_peer_probe_timeout_ms"
+                                                        );
+                                                    });
+            update.sync_peer_probe_max_per_refresh = json_int64(*parsed, "syncPeerProbeMaxPerRefresh")
+                                                         .or_else([&] {
+                                                             return json_int64(
+                                                                 *parsed,
+                                                                 "sync_peer_probe_max_per_refresh"
+                                                             );
+                                                         });
+            update.sync_peer_probe_fail_closed = json_bool(*parsed, "syncPeerProbeFailClosed")
+                                                     .or_else([&] {
+                                                         return json_bool(
+                                                             *parsed,
+                                                             "sync_peer_probe_fail_closed"
+                                                         );
+                                                     });
+            update.sync_peer_probe_fail_closed_failures =
+                json_int64(*parsed, "syncPeerProbeFailClosedFailures")
+                    .or_else([&] {
+                        return json_int64(
+                            *parsed,
+                            "sync_peer_probe_fail_closed_failures"
+                        );
+                    });
 
             const auto response = controllers::update_settings(update);
             if (response.status == 200) {

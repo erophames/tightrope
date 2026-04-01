@@ -124,6 +124,13 @@ file(GLOB_RECURSE TIGHTROPE_SOURCES
   native/sync/*.cpp
 )
 
+set(TIGHTROPE_TEST_ONLY_CONSENSUS_SOURCES
+  ${CMAKE_SOURCE_DIR}/native/sync/src/consensus/raft_log.cpp
+  ${CMAKE_SOURCE_DIR}/native/sync/src/consensus/raft_rpc.cpp
+  ${CMAKE_SOURCE_DIR}/native/sync/src/consensus/raft_scheduler.cpp
+)
+list(REMOVE_ITEM TIGHTROPE_SOURCES ${TIGHTROPE_TEST_ONLY_CONSENSUS_SOURCES})
+
 set(TIGHTROPE_COMMON_LINK_LIBS
   ${TIGHTROPE_NURAFT_TARGET}
   unofficial::uwebsockets::uwebsockets
@@ -206,6 +213,7 @@ if(BUILD_TESTING)
   endif()
 
   set(TIGHTROPE_TESTABLE_SOURCES ${TIGHTROPE_SOURCES})
+  list(APPEND TIGHTROPE_TESTABLE_SOURCES ${TIGHTROPE_TEST_ONLY_CONSENSUS_SOURCES})
   list(REMOVE_ITEM TIGHTROPE_TESTABLE_SOURCES
     ${CMAKE_SOURCE_DIR}/native/bridge/src/addon.cpp
     ${CMAKE_SOURCE_DIR}/native/bridge/src/addon_bindings_support.cpp

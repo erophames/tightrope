@@ -133,6 +133,7 @@ export function App() {
             onSetStickyThreadsEnabled={model.setStickyThreadsEnabled}
             onSetPreferEarlierResetAccounts={model.setPreferEarlierResetAccounts}
             onSetOpenaiCacheAffinityMaxAgeSeconds={model.setOpenaiCacheAffinityMaxAgeSeconds}
+            onSetRoutingPlanModelPricingUsdPerMillion={model.setRoutingPlanModelPricingUsdPerMillion}
             onSetFirewallDraftIpAddress={model.setFirewallDraft}
             onAddFirewallIpAddress={model.addFirewallIpAddress}
             onRemoveFirewallIpAddress={model.removeFirewallIpAddress}
@@ -148,6 +149,22 @@ export function App() {
             onSetSyncConflictResolution={model.setSyncConflictResolution}
             onSetSyncJournalRetentionDays={model.setSyncJournalRetentionDays}
             onSetSyncTlsEnabled={model.setSyncTlsEnabled}
+            onSetSyncRequireHandshakeAuth={model.setSyncRequireHandshakeAuth}
+            onSetSyncClusterSharedSecret={model.setSyncClusterSharedSecret}
+            onSetSyncTlsVerifyPeer={model.setSyncTlsVerifyPeer}
+            onSetSyncTlsCaCertificatePath={model.setSyncTlsCaCertificatePath}
+            onSetSyncTlsCertificateChainPath={model.setSyncTlsCertificateChainPath}
+            onSetSyncTlsPrivateKeyPath={model.setSyncTlsPrivateKeyPath}
+            onSetSyncTlsPinnedPeerCertificateSha256={model.setSyncTlsPinnedPeerCertificateSha256}
+            onSetSyncSchemaVersion={model.setSyncSchemaVersion}
+            onSetSyncMinSupportedSchemaVersion={model.setSyncMinSupportedSchemaVersion}
+            onSetSyncAllowSchemaDowngrade={model.setSyncAllowSchemaDowngrade}
+            onSetSyncPeerProbeEnabled={model.setSyncPeerProbeEnabled}
+            onSetSyncPeerProbeIntervalMs={model.setSyncPeerProbeIntervalMs}
+            onSetSyncPeerProbeTimeoutMs={model.setSyncPeerProbeTimeoutMs}
+            onSetSyncPeerProbeMaxPerRefresh={model.setSyncPeerProbeMaxPerRefresh}
+            onSetSyncPeerProbeFailClosed={model.setSyncPeerProbeFailClosed}
+            onSetSyncPeerProbeFailClosedFailures={model.setSyncPeerProbeFailClosedFailures}
             onTriggerSyncNow={model.triggerSyncNow}
             onSetTheme={model.setTheme}
           />

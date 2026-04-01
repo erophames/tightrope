@@ -45,7 +45,10 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
 
         SQLite::Statement delete_stmt(*handle.db, kDeleteSql);
         delete_stmt.bind(1, *api_key_pk);
-        (void)delete_stmt.exec();
+        const auto deleted_rows = delete_stmt.exec();
+        if (deleted_rows < 0) {
+            return std::nullopt;
+        }
 
         SQLite::Statement insert_stmt(*handle.db, kInsertSql);
         for (const auto& limit : limits) {
@@ -62,7 +65,10 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
             if (!api_key_repo_internal::bind_optional_text(insert_stmt, 8, limit.model_filter)) {
                 return std::nullopt;
             }
-            (void)insert_stmt.exec();
+            const auto inserted_rows = insert_stmt.exec();
+            if (inserted_rows != 1) {
+                return std::nullopt;
+            }
         }
 
         txn.commit();
@@ -74,4 +80,3 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
 }
 
 } // namespace tightrope::db
-

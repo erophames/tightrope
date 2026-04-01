@@ -25,6 +25,19 @@ std::optional<std::uint16_t> parse_port_string(const std::string_view raw) {
     return static_cast<std::uint16_t>(parsed);
 }
 
+std::optional<std::int64_t> parse_int64_string(const std::string_view raw) {
+    if (raw.empty()) {
+        return std::nullopt;
+    }
+
+    std::int64_t parsed = 0;
+    auto [ptr, ec] = std::from_chars(raw.data(), raw.data() + raw.size(), parsed);
+    if (ec != std::errc() || ptr != raw.data() + raw.size()) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
 std::optional<std::string> read_env_string(const char* key) {
     const char* value = std::getenv(key);
     if (value == nullptr || value[0] == '\0') {
@@ -39,6 +52,14 @@ std::optional<std::uint16_t> read_env_port(const char* key) {
         return std::nullopt;
     }
     return parse_port_string(*raw);
+}
+
+std::optional<std::int64_t> read_env_int64(const char* key) {
+    auto raw = read_env_string(key);
+    if (!raw.has_value()) {
+        return std::nullopt;
+    }
+    return parse_int64_string(*raw);
 }
 
 std::optional<std::string> read_toml_string(const toml::node_view<const toml::node>& value) {
@@ -59,6 +80,16 @@ std::optional<std::uint16_t> read_toml_port(const toml::node_view<const toml::no
         return parse_port_string(*string_value);
     }
 
+    return std::nullopt;
+}
+
+std::optional<std::int64_t> read_toml_int64(const toml::node_view<const toml::node>& value) {
+    if (const auto integer_value = value.value<std::int64_t>(); integer_value.has_value()) {
+        return *integer_value;
+    }
+    if (const auto string_value = value.value<std::string>(); string_value.has_value()) {
+        return parse_int64_string(*string_value);
+    }
     return std::nullopt;
 }
 
@@ -95,6 +126,13 @@ void apply_toml_file_config(const toml::table& table, Config& config) {
     if (const auto log_level = read_toml_string(table["log_level"]); log_level.has_value()) {
         config.log_level = *log_level;
     }
+    if (const auto sticky_ttl_ms = read_toml_int64(table["sticky_ttl_ms"]); sticky_ttl_ms.has_value() && *sticky_ttl_ms > 0) {
+        config.sticky_ttl_ms = *sticky_ttl_ms;
+    }
+    if (const auto sticky_cleanup_interval_ms = read_toml_int64(table["sticky_cleanup_interval_ms"]);
+        sticky_cleanup_interval_ms.has_value() && *sticky_cleanup_interval_ms > 0) {
+        config.sticky_cleanup_interval_ms = *sticky_cleanup_interval_ms;
+    }
 
     if (const auto* server = table["server"].as_table(); server != nullptr) {
         if (const auto host = read_toml_string((*server)["host"]); host.has_value()) {
@@ -122,6 +160,16 @@ void apply_toml_file_config(const toml::table& table, Config& config) {
             config.log_level = *log_level;
         }
     }
+
+    if (const auto* proxy = table["proxy"].as_table(); proxy != nullptr) {
+        if (const auto sticky_ttl_ms = read_toml_int64((*proxy)["sticky_ttl_ms"]); sticky_ttl_ms.has_value() && *sticky_ttl_ms > 0) {
+            config.sticky_ttl_ms = *sticky_ttl_ms;
+        }
+        if (const auto sticky_cleanup_interval_ms = read_toml_int64((*proxy)["sticky_cleanup_interval_ms"]);
+            sticky_cleanup_interval_ms.has_value() && *sticky_cleanup_interval_ms > 0) {
+            config.sticky_cleanup_interval_ms = *sticky_cleanup_interval_ms;
+        }
+    }
 }
 
 } // namespace
@@ -133,6 +181,8 @@ Config load_config(const ConfigOverrides& overrides) {
     const auto env_db_path = read_env_string("TIGHTROPE_DB_PATH");
     const auto env_config_path = read_env_string("TIGHTROPE_CONFIG_PATH");
     const auto env_log_level = read_env_string("TIGHTROPE_LOG_LEVEL");
+    const auto env_sticky_ttl_ms = read_env_int64("TIGHTROPE_STICKY_TTL_MS");
+    const auto env_sticky_cleanup_interval_ms = read_env_int64("TIGHTROPE_STICKY_CLEANUP_INTERVAL_MS");
 
     if (overrides.config_path.has_value()) {
         config.config_path = *overrides.config_path;
@@ -158,6 +208,12 @@ Config load_config(const ConfigOverrides& overrides) {
     if (env_log_level.has_value()) {
         config.log_level = *env_log_level;
     }
+    if (env_sticky_ttl_ms.has_value() && *env_sticky_ttl_ms > 0) {
+        config.sticky_ttl_ms = *env_sticky_ttl_ms;
+    }
+    if (env_sticky_cleanup_interval_ms.has_value() && *env_sticky_cleanup_interval_ms > 0) {
+        config.sticky_cleanup_interval_ms = *env_sticky_cleanup_interval_ms;
+    }
 
     if (overrides.host.has_value()) {
         config.host = *overrides.host;
@@ -173,6 +229,12 @@ Config load_config(const ConfigOverrides& overrides) {
     }
     if (overrides.log_level.has_value()) {
         config.log_level = *overrides.log_level;
+    }
+    if (overrides.sticky_ttl_ms.has_value() && *overrides.sticky_ttl_ms > 0) {
+        config.sticky_ttl_ms = *overrides.sticky_ttl_ms;
+    }
+    if (overrides.sticky_cleanup_interval_ms.has_value() && *overrides.sticky_cleanup_interval_ms > 0) {
+        config.sticky_cleanup_interval_ms = *overrides.sticky_cleanup_interval_ms;
     }
 
     return config;

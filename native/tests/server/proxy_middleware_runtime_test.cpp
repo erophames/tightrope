@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -43,6 +44,23 @@ std::string make_http_post_request(
     request += "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
     request.append(body.data(), body.size());
     return request;
+}
+
+std::size_t count_substring_occurrences(std::string_view haystack, std::string_view needle) {
+    if (needle.empty()) {
+        return 0;
+    }
+    std::size_t count = 0;
+    std::size_t cursor = 0;
+    while (true) {
+        const auto found = haystack.find(needle, cursor);
+        if (found == std::string_view::npos) {
+            break;
+        }
+        ++count;
+        cursor = found + needle.size();
+    }
+    return count;
 }
 
 struct RequestLogSnapshot {
@@ -915,15 +933,22 @@ TEST_CASE("runtime chat completions maps tool calls for JSON and streaming", "[s
                     .status = 200,
                     .events =
                         {
-                            R"({"contract":"proxy-streaming-v1","type":"response.function_call_arguments.delta","call_id":"call_stream_1","name":"lookup","delta":"{\"city\":\"Paris\"}"})",
+                            R"({"contract":"proxy-streaming-v1","type":"response.function_call_arguments.delta","call_id":"call_stream_1","name":"lookup","delta":"{\"city\":\"Zurich\",\"unit\":\"C\"}"})",
+                            R"({"contract":"proxy-streaming-v1","type":"response.function_call_arguments.done","call_id":"call_stream_1","name":"lookup","arguments":"{\"city\":\"Zurich\",\"unit\":\"C\"}"})",
+                            R"({"contract":"proxy-streaming-v1","type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_stream_1","name":"lookup","arguments":"{\"city\":\"Zurich\",\"unit\":\"C\"}"}})",
                             R"({"contract":"proxy-streaming-v1","type":"response.completed","response":{"id":"resp_tool_stream","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}})",
                         },
                 };
             }
             return tightrope::proxy::UpstreamExecutionResult{
                 .status = 200,
-                .body =
-                    R"({"id":"resp_tool_json","object":"response","model":"gpt-5.4","status":"completed","output":[{"type":"function_call","call_id":"call_json_1","name":"lookup","arguments":"{\"city\":\"Paris\"}"}]})",
+                .events =
+                    {
+                        R"({"contract":"proxy-streaming-v1","type":"response.function_call_arguments.delta","call_id":"call_json_1","name":"lookup","delta":"{\"city\":\"Zurich\",\"unit\":\"C\"}"})",
+                        R"({"contract":"proxy-streaming-v1","type":"response.function_call_arguments.done","call_id":"call_json_1","name":"lookup","arguments":"{\"city\":\"Zurich\",\"unit\":\"C\"}"})",
+                        R"({"contract":"proxy-streaming-v1","type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_json_1","name":"lookup","arguments":"{\"city\":\"Zurich\",\"unit\":\"C\"}"}})",
+                        R"({"contract":"proxy-streaming-v1","type":"response.completed","response":{"id":"resp_tool_json","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}})",
+                    },
             };
         }
     );
@@ -945,6 +970,7 @@ TEST_CASE("runtime chat completions maps tool calls for JSON and streaming", "[s
     REQUIRE(json_response.find("\"tool_calls\"") != std::string::npos);
     REQUIRE(json_response.find("\"call_json_1\"") != std::string::npos);
     REQUIRE(json_response.find("\"finish_reason\":\"tool_calls\"") != std::string::npos);
+    REQUIRE(count_substring_occurrences(json_response, R"({\"city\":\"Zurich\",\"unit\":\"C\"})") == 1);
 
     const auto sse_response = tightrope::tests::server::send_raw_http(
         port,
@@ -958,6 +984,7 @@ TEST_CASE("runtime chat completions maps tool calls for JSON and streaming", "[s
     REQUIRE(sse_response.find("\"tool_calls\"") != std::string::npos);
     REQUIRE(sse_response.find("\"call_stream_1\"") != std::string::npos);
     REQUIRE(sse_response.find("\"finish_reason\":\"tool_calls\"") != std::string::npos);
+    REQUIRE(count_substring_occurrences(sse_response, R"({\"city\":\"Zurich\",\"unit\":\"C\"})") == 1);
 
     REQUIRE(runtime.stop());
     std::filesystem::remove(db_path);

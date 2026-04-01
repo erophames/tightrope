@@ -11,6 +11,22 @@ interface DatabaseSyncSectionProps {
   syncConflictResolution: SyncConflictResolution;
   syncJournalRetentionDays: number;
   syncTlsEnabled: boolean;
+  syncRequireHandshakeAuth: boolean;
+  syncClusterSharedSecret: string;
+  syncTlsVerifyPeer: boolean;
+  syncTlsCaCertificatePath: string;
+  syncTlsCertificateChainPath: string;
+  syncTlsPrivateKeyPath: string;
+  syncTlsPinnedPeerCertificateSha256: string;
+  syncSchemaVersion: number;
+  syncMinSupportedSchemaVersion: number;
+  syncAllowSchemaDowngrade: boolean;
+  syncPeerProbeEnabled: boolean;
+  syncPeerProbeIntervalMs: number;
+  syncPeerProbeTimeoutMs: number;
+  syncPeerProbeMaxPerRefresh: number;
+  syncPeerProbeFailClosed: boolean;
+  syncPeerProbeFailClosedFailures: number;
   clusterStatus: ClusterStatus;
   onToggleSyncEnabled: () => void;
   onSetSyncSiteId: (siteId: number) => void;
@@ -24,6 +40,22 @@ interface DatabaseSyncSectionProps {
   onSetSyncConflictResolution: (strategy: SyncConflictResolution) => void;
   onSetSyncJournalRetentionDays: (days: number) => void;
   onSetSyncTlsEnabled: (enabled: boolean) => void;
+  onSetSyncRequireHandshakeAuth: (enabled: boolean) => void;
+  onSetSyncClusterSharedSecret: (secret: string) => void;
+  onSetSyncTlsVerifyPeer: (enabled: boolean) => void;
+  onSetSyncTlsCaCertificatePath: (path: string) => void;
+  onSetSyncTlsCertificateChainPath: (path: string) => void;
+  onSetSyncTlsPrivateKeyPath: (path: string) => void;
+  onSetSyncTlsPinnedPeerCertificateSha256: (value: string) => void;
+  onSetSyncSchemaVersion: (version: number) => void;
+  onSetSyncMinSupportedSchemaVersion: (version: number) => void;
+  onSetSyncAllowSchemaDowngrade: (enabled: boolean) => void;
+  onSetSyncPeerProbeEnabled: (enabled: boolean) => void;
+  onSetSyncPeerProbeIntervalMs: (value: number) => void;
+  onSetSyncPeerProbeTimeoutMs: (value: number) => void;
+  onSetSyncPeerProbeMaxPerRefresh: (value: number) => void;
+  onSetSyncPeerProbeFailClosed: (enabled: boolean) => void;
+  onSetSyncPeerProbeFailClosedFailures: (value: number) => void;
   onTriggerSyncNow: () => void;
 }
 
@@ -48,6 +80,22 @@ export function DatabaseSyncSection({
   syncConflictResolution,
   syncJournalRetentionDays,
   syncTlsEnabled,
+  syncRequireHandshakeAuth,
+  syncClusterSharedSecret,
+  syncTlsVerifyPeer,
+  syncTlsCaCertificatePath,
+  syncTlsCertificateChainPath,
+  syncTlsPrivateKeyPath,
+  syncTlsPinnedPeerCertificateSha256,
+  syncSchemaVersion,
+  syncMinSupportedSchemaVersion,
+  syncAllowSchemaDowngrade,
+  syncPeerProbeEnabled,
+  syncPeerProbeIntervalMs,
+  syncPeerProbeTimeoutMs,
+  syncPeerProbeMaxPerRefresh,
+  syncPeerProbeFailClosed,
+  syncPeerProbeFailClosedFailures,
   clusterStatus,
   onToggleSyncEnabled,
   onSetSyncSiteId,
@@ -61,9 +109,27 @@ export function DatabaseSyncSection({
   onSetSyncConflictResolution,
   onSetSyncJournalRetentionDays,
   onSetSyncTlsEnabled,
+  onSetSyncRequireHandshakeAuth,
+  onSetSyncClusterSharedSecret,
+  onSetSyncTlsVerifyPeer,
+  onSetSyncTlsCaCertificatePath,
+  onSetSyncTlsCertificateChainPath,
+  onSetSyncTlsPrivateKeyPath,
+  onSetSyncTlsPinnedPeerCertificateSha256,
+  onSetSyncSchemaVersion,
+  onSetSyncMinSupportedSchemaVersion,
+  onSetSyncAllowSchemaDowngrade,
+  onSetSyncPeerProbeEnabled,
+  onSetSyncPeerProbeIntervalMs,
+  onSetSyncPeerProbeTimeoutMs,
+  onSetSyncPeerProbeMaxPerRefresh,
+  onSetSyncPeerProbeFailClosed,
+  onSetSyncPeerProbeFailClosedFailures,
   onTriggerSyncNow,
 }: DatabaseSyncSectionProps) {
   const peers = clusterStatus.peers ?? [];
+  const connectedPeers = peers.filter((peer) => peer.state === 'connected').length;
+  const unreachablePeers = peers.filter((peer) => peer.state === 'unreachable').length;
 
   return (
     <div className="settings-group">
@@ -149,7 +215,33 @@ export function DatabaseSyncSection({
             peers.map((peer) => (
               <div key={`${peer.site_id}-${peer.address}`} style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
                 <span style={{ fontFamily: "'SF Mono',ui-monospace,monospace", color: 'var(--text-secondary)' }}>{peer.site_id}</span>
-                <span style={{ color: 'var(--ok)' }}>{peer.address}</span>
+                <span
+                  style={{
+                    color: peer.state === 'connected' ? 'var(--ok)' : peer.state === 'unreachable' ? 'var(--danger)' : 'var(--warn)',
+                  }}
+                >
+                  {peer.address}
+                </span>
+                <span style={{ color: 'var(--text-secondary)', fontSize: '11px' }}>
+                  {peer.state} · lag {peer.replication_lag_entries} · hb failures {peer.consecutive_heartbeat_failures} · probe failures{' '}
+                  {peer.consecutive_probe_failures} · ingress {peer.ingress_accepted_batches}/{peer.ingress_rejected_batches} · last wire{' '}
+                  {peer.ingress_last_wire_batch_bytes}B · apply ms last/max/ewma{' '}
+                  {peer.ingress_last_apply_duration_ms}/{peer.ingress_max_apply_duration_ms}/
+                  {peer.ingress_apply_duration_ewma_ms.toFixed(2)} · lag ms last/max/ewma{' '}
+                  {peer.ingress_last_replication_latency_ms}/{peer.ingress_max_replication_latency_ms}/
+                  {peer.ingress_replication_latency_ewma_ms.toFixed(2)} · inflight b cur/peak{' '}
+                  {peer.ingress_inflight_wire_batches}/{peer.ingress_inflight_wire_batches_peak} · inflight bytes cur/peak{' '}
+                  {peer.ingress_inflight_wire_bytes}/{peer.ingress_inflight_wire_bytes_peak} · rej auth/schema/rate/bp/invalid/proto/apply{' '}
+                  {peer.ingress_rejected_handshake_auth}/{peer.ingress_rejected_handshake_schema}/{peer.ingress_rejected_rate_limit}/
+                  {peer.ingress_rejected_backpressure + peer.ingress_rejected_inflight_wire_budget}/{peer.ingress_rejected_invalid_wire_batch}/
+                  {peer.ingress_rejected_ingress_protocol}/{peer.ingress_rejected_apply_batch} · last probe {formatLastSync(peer.last_probe_at)}
+                  {peer.last_probe_duration_ms !== null ? ` · probe ${peer.last_probe_duration_ms}ms` : ''}
+                  {peer.last_ingress_rejection_reason ? ` · ingress reason: ${peer.last_ingress_rejection_reason}` : ''}
+                  {peer.last_probe_error ? ` · probe error: ${peer.last_probe_error}` : ''}
+                  {peer.last_ingress_rejection_error
+                    ? ` · ingress error: ${peer.last_ingress_rejection_error}`
+                    : ''}
+                </span>
                 <button className="btn-danger" type="button" style={{ fontSize: '11px', padding: '0.15rem 0.4rem' }} onClick={() => onRemovePeer(peer.site_id)}>
                   Remove
                 </button>
@@ -237,6 +329,226 @@ export function DatabaseSyncSection({
       </div>
       <div className="setting-row">
         <div className="setting-label">
+          <strong>Handshake auth</strong>
+          <span>Require signed peer handshakes with a shared cluster secret</span>
+        </div>
+        <button
+          className={`setting-toggle${syncRequireHandshakeAuth ? ' on' : ''}`}
+          type="button"
+          aria-label="Toggle handshake auth"
+          onClick={() => onSetSyncRequireHandshakeAuth(!syncRequireHandshakeAuth)}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Cluster shared secret</strong>
+          <span>Pre-shared secret used for handshake HMAC authentication</span>
+        </div>
+        <input
+          className="setting-input"
+          type="password"
+          placeholder="cluster secret"
+          value={syncClusterSharedSecret}
+          onChange={(event) => onSetSyncClusterSharedSecret(event.target.value)}
+          style={{ width: '220px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>TLS peer verification</strong>
+          <span>Validate peer certificate chain for sync connections</span>
+        </div>
+        <button
+          className={`setting-toggle${syncTlsVerifyPeer ? ' on' : ''}`}
+          type="button"
+          aria-label="Toggle sync tls peer verification"
+          onClick={() => onSetSyncTlsVerifyPeer(!syncTlsVerifyPeer)}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>TLS CA bundle path</strong>
+          <span>PEM file used to verify peer certificate chain</span>
+        </div>
+        <input
+          className="setting-input"
+          type="text"
+          placeholder="/path/to/ca.pem"
+          value={syncTlsCaCertificatePath}
+          onChange={(event) => onSetSyncTlsCaCertificatePath(event.target.value)}
+          style={{ width: '260px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>TLS cert chain path</strong>
+          <span>Node certificate chain PEM presented to peers</span>
+        </div>
+        <input
+          className="setting-input"
+          type="text"
+          placeholder="/path/to/cert-chain.pem"
+          value={syncTlsCertificateChainPath}
+          onChange={(event) => onSetSyncTlsCertificateChainPath(event.target.value)}
+          style={{ width: '260px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>TLS private key path</strong>
+          <span>Private key PEM paired with the cert chain</span>
+        </div>
+        <input
+          className="setting-input"
+          type="text"
+          placeholder="/path/to/key.pem"
+          value={syncTlsPrivateKeyPath}
+          onChange={(event) => onSetSyncTlsPrivateKeyPath(event.target.value)}
+          style={{ width: '260px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Pinned peer SHA-256</strong>
+          <span>Optional leaf certificate fingerprint pin (hex)</span>
+        </div>
+        <input
+          className="setting-input"
+          type="text"
+          placeholder="64-char sha256"
+          value={syncTlsPinnedPeerCertificateSha256}
+          onChange={(event) => onSetSyncTlsPinnedPeerCertificateSha256(event.target.value)}
+          style={{ width: '260px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Sync schema version</strong>
+          <span>Local protocol/schema version advertised to peers</span>
+        </div>
+        <input
+          className="setting-input"
+          type="number"
+          min={1}
+          max={1000000}
+          value={syncSchemaVersion}
+          onChange={(event) => onSetSyncSchemaVersion(Math.max(1, Number(event.target.value) || 1))}
+          style={{ width: '90px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Min supported schema</strong>
+          <span>Reject peers below this schema version</span>
+        </div>
+        <input
+          className="setting-input"
+          type="number"
+          min={1}
+          max={1000000}
+          value={syncMinSupportedSchemaVersion}
+          onChange={(event) => onSetSyncMinSupportedSchemaVersion(Math.max(1, Number(event.target.value) || 1))}
+          style={{ width: '90px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Allow schema downgrade</strong>
+          <span>Permit negotiated downgrade to a lower compatible schema</span>
+        </div>
+        <button
+          className={`setting-toggle${syncAllowSchemaDowngrade ? ' on' : ''}`}
+          type="button"
+          aria-label="Toggle sync schema downgrade"
+          onClick={() => onSetSyncAllowSchemaDowngrade(!syncAllowSchemaDowngrade)}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Peer probe enabled</strong>
+          <span>Run lifecycle transport probes during peer refresh</span>
+        </div>
+        <button
+          className={`setting-toggle${syncPeerProbeEnabled ? ' on' : ''}`}
+          type="button"
+          aria-label="Toggle sync peer probe enabled"
+          onClick={() => onSetSyncPeerProbeEnabled(!syncPeerProbeEnabled)}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Peer probe interval (ms)</strong>
+          <span>Minimum interval between probe attempts for the same peer</span>
+        </div>
+        <input
+          className="setting-input"
+          type="number"
+          min={100}
+          max={300000}
+          value={syncPeerProbeIntervalMs}
+          onChange={(event) => onSetSyncPeerProbeIntervalMs(Number(event.target.value) || 0)}
+          style={{ width: '110px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Peer probe timeout (ms)</strong>
+          <span>Timeout used for per-attempt transport handshake probes</span>
+        </div>
+        <input
+          className="setting-input"
+          type="number"
+          min={50}
+          max={60000}
+          value={syncPeerProbeTimeoutMs}
+          onChange={(event) => onSetSyncPeerProbeTimeoutMs(Number(event.target.value) || 0)}
+          style={{ width: '110px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Max probes per refresh</strong>
+          <span>Bound probe work per refresh cycle to avoid bursts</span>
+        </div>
+        <input
+          className="setting-input"
+          type="number"
+          min={1}
+          max={64}
+          value={syncPeerProbeMaxPerRefresh}
+          onChange={(event) => onSetSyncPeerProbeMaxPerRefresh(Number(event.target.value) || 0)}
+          style={{ width: '90px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Fail closed on probe failures</strong>
+          <span>Mark peers unreachable after repeated failed probes</span>
+        </div>
+        <button
+          className={`setting-toggle${syncPeerProbeFailClosed ? ' on' : ''}`}
+          type="button"
+          aria-label="Toggle sync peer probe fail closed"
+          onClick={() => onSetSyncPeerProbeFailClosed(!syncPeerProbeFailClosed)}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
+          <strong>Fail-closed threshold</strong>
+          <span>Consecutive probe failures required before fail-closed state applies</span>
+        </div>
+        <input
+          className="setting-input"
+          type="number"
+          min={1}
+          max={1000}
+          value={syncPeerProbeFailClosedFailures}
+          onChange={(event) => onSetSyncPeerProbeFailClosedFailures(Number(event.target.value) || 0)}
+          style={{ width: '90px', textAlign: 'right', fontFamily: "'SF Mono',ui-monospace,monospace" }}
+        />
+      </div>
+      <div className="setting-row">
+        <div className="setting-label">
           <strong>Consistency model</strong>
         </div>
         <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
@@ -263,9 +575,62 @@ export function DatabaseSyncSection({
             <span style={{ color: 'var(--text-secondary)' }}>Commit #{clusterStatus.commit_index}</span>
           </div>
           <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', justifyContent: 'flex-end' }}>
-            <span style={{ color: 'var(--ok)' }}>{clusterStatus.peers.length} peers connected</span>
+            <span style={{ color: 'var(--ok)' }}>
+              {connectedPeers}/{clusterStatus.peers.length} peers connected
+            </span>
+            {unreachablePeers > 0 ? <span style={{ color: 'var(--danger)' }}>{unreachablePeers} unreachable</span> : null}
             <span style={{ color: 'var(--text-secondary)' }}>Last sync: {formatLastSync(clusterStatus.last_sync_at)}</span>
             <span style={{ color: 'var(--text-secondary)' }}>Journal: {clusterStatus.journal_entries}</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', justifyContent: 'flex-end', color: 'var(--text-secondary)' }}>
+            <span>
+              Lag peers/total/max/avg {clusterStatus.replication_lagging_peers}/
+              {clusterStatus.replication_lag_total_entries}/
+              {clusterStatus.replication_lag_max_entries}/
+              {clusterStatus.replication_lag_avg_entries}
+            </span>
+            <span>
+              lag ewma/samples {clusterStatus.replication_lag_ewma_entries.toFixed(2)}/
+              {clusterStatus.replication_lag_ewma_samples}
+            </span>
+            <span>
+              alert threshold/streak/required {clusterStatus.replication_lag_alert_threshold_entries}/
+              {clusterStatus.replication_lag_alert_streak}/
+              {clusterStatus.replication_lag_alert_sustained_refreshes}
+            </span>
+            <span style={{ color: clusterStatus.replication_lag_alert_active ? 'var(--danger)' : 'var(--ok)' }}>
+              lag alert {clusterStatus.replication_lag_alert_active ? 'active' : 'clear'}
+            </span>
+            {clusterStatus.replication_lag_last_alert_at !== null ? (
+              <span>last alert {formatLastSync(clusterStatus.replication_lag_last_alert_at)}</span>
+            ) : null}
+          </div>
+          <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center', justifyContent: 'flex-end', color: 'var(--text-secondary)' }}>
+            <span>
+              Ingress sockets {clusterStatus.ingress_socket_accepted_connections}/{clusterStatus.ingress_socket_completed_connections}/
+              {clusterStatus.ingress_socket_failed_connections} (accepted/completed/failed)
+            </span>
+            <span>active/peak {clusterStatus.ingress_socket_active_connections}/{clusterStatus.ingress_socket_peak_active_connections}</span>
+            <span>accept fail {clusterStatus.ingress_socket_accept_failures}</span>
+            <span>tls hs fail {clusterStatus.ingress_socket_tls_handshake_failures}</span>
+            <span>read/apply/ack fail {clusterStatus.ingress_socket_read_failures}/{clusterStatus.ingress_socket_apply_failures}/{clusterStatus.ingress_socket_handshake_ack_failures}</span>
+            <span>bytes {clusterStatus.ingress_socket_bytes_read}</span>
+            <span>conn ms last/max {clusterStatus.ingress_socket_last_connection_duration_ms}/{clusterStatus.ingress_socket_max_connection_duration_ms}</span>
+            <span>conn ms ewma {clusterStatus.ingress_socket_connection_duration_ewma_ms.toFixed(2)}</span>
+            <span>conn ms total {clusterStatus.ingress_socket_total_connection_duration_ms}</span>
+            <span>
+              conn hist ≤10/≤50/≤250/≤1000/&gt;1000ms{' '}
+              {clusterStatus.ingress_socket_connection_duration_le_10ms}/
+              {clusterStatus.ingress_socket_connection_duration_le_50ms}/
+              {clusterStatus.ingress_socket_connection_duration_le_250ms}/
+              {clusterStatus.ingress_socket_connection_duration_le_1000ms}/
+              {clusterStatus.ingress_socket_connection_duration_gt_1000ms}
+            </span>
+            <span>queue max b/f/p {clusterStatus.ingress_socket_max_buffered_bytes}/{clusterStatus.ingress_socket_max_queued_frames}/{clusterStatus.ingress_socket_max_queued_payload_bytes}</span>
+            <span>pause cycles/sleep {clusterStatus.ingress_socket_paused_read_cycles}/{clusterStatus.ingress_socket_paused_read_sleep_ms}ms</span>
+            {clusterStatus.ingress_socket_last_failure_error ? (
+              <span style={{ color: 'var(--warn)' }}>last socket error: {clusterStatus.ingress_socket_last_failure_error}</span>
+            ) : null}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn-secondary" type="button" onClick={onTriggerSyncNow}>

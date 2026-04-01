@@ -110,17 +110,23 @@ void SqliteRaftStorage::write_at(const nuraft::ulong index, nuraft::ptr<nuraft::
     SqliteStatement remove_stmt(db_, "DELETE FROM raft_log WHERE idx >= ?1;");
     if (!remove_stmt.ok() || sqlite3_bind_int64(remove_stmt.get(), 1, static_cast<sqlite3_int64>(index)) != SQLITE_OK ||
         sqlite3_step(remove_stmt.get()) != SQLITE_DONE || !upsert_log_locked(index, *entry)) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during write_at: " + last_error_;
+        }
         return;
     }
 
     const auto start = start_index_locked();
     if (index < start && !write_meta_int_locked(kMetaLogStartIndex, index)) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during write_at: " + last_error_;
+        }
         return;
     }
     if (!exec_locked("COMMIT;")) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during write_at: " + last_error_;
+        }
     }
 }
 
@@ -217,18 +223,24 @@ bool SqliteRaftStorage::compact(const nuraft::ulong last_log_index) {
     SqliteStatement stmt(db_, "DELETE FROM raft_log WHERE idx <= ?1;");
     if (!stmt.ok() || sqlite3_bind_int64(stmt.get(), 1, static_cast<sqlite3_int64>(last_log_index)) != SQLITE_OK ||
         sqlite3_step(stmt.get()) != SQLITE_DONE) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during compact: " + last_error_;
+        }
         return false;
     }
 
     const auto start = start_index_locked();
     const auto next_start = start <= last_log_index ? last_log_index + 1 : start;
     if (!write_meta_int_locked(kMetaLogStartIndex, next_start)) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during compact: " + last_error_;
+        }
         return false;
     }
     if (!exec_locked("COMMIT;")) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during compact: " + last_error_;
+        }
         return false;
     }
     return true;
@@ -267,7 +279,9 @@ void SqliteRaftStorage::apply_pack(const nuraft::ulong index, nuraft::buffer& pa
     }
 
     if (!ok || !exec_locked("COMMIT;")) {
-        (void)exec_locked("ROLLBACK;");
+        if (!exec_locked("ROLLBACK;")) {
+            last_error_ = "rollback failed during apply_pack: " + last_error_;
+        }
     }
 }
 

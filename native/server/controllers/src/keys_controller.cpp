@@ -6,6 +6,7 @@
 #include "api_keys/key_validator.h"
 #include "api_keys/limit_enforcer.h"
 #include "controller_db.h"
+#include "linearizable_read_guard.h"
 #include "text/ascii.h"
 #include "repositories/api_key_repo.h"
 
@@ -96,6 +97,15 @@ std::string generate_key_id() {
 } // namespace
 
 ApiKeyMutationResponse create_api_key(const ApiKeyCreateRequest& request, sqlite3* db) {
+    const auto guard = check_linearizable_read_access("api_keys");
+    if (!guard.allow) {
+        return {
+            .status = guard.status,
+            .code = guard.code,
+            .message = guard.message,
+        };
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return {
@@ -186,6 +196,15 @@ ApiKeyMutationResponse create_api_key(const ApiKeyCreateRequest& request, sqlite
 }
 
 ApiKeyListResponse list_api_keys(sqlite3* db) {
+    const auto guard = check_linearizable_read_access("api_keys");
+    if (!guard.allow) {
+        return {
+            .status = guard.status,
+            .code = guard.code,
+            .message = guard.message,
+        };
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return {
@@ -203,6 +222,15 @@ ApiKeyListResponse list_api_keys(sqlite3* db) {
 }
 
 ApiKeyMutationResponse update_api_key(const std::string_view key_id, const ApiKeyUpdateRequest& request, sqlite3* db) {
+    const auto guard = check_linearizable_read_access("api_keys");
+    if (!guard.allow) {
+        return {
+            .status = guard.status,
+            .code = guard.code,
+            .message = guard.message,
+        };
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return {
@@ -284,6 +312,15 @@ ApiKeyMutationResponse update_api_key(const std::string_view key_id, const ApiKe
 }
 
 ApiKeyMutationResponse regenerate_api_key(const std::string_view key_id, sqlite3* db) {
+    const auto guard = check_linearizable_read_access("api_keys");
+    if (!guard.allow) {
+        return {
+            .status = guard.status,
+            .code = guard.code,
+            .message = guard.message,
+        };
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return {
@@ -313,6 +350,15 @@ ApiKeyMutationResponse regenerate_api_key(const std::string_view key_id, sqlite3
 }
 
 ApiKeyDeleteResponse delete_api_key(const std::string_view key_id, sqlite3* db) {
+    const auto guard = check_linearizable_read_access("api_keys");
+    if (!guard.allow) {
+        return {
+            .status = guard.status,
+            .code = guard.code,
+            .message = guard.message,
+        };
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return {

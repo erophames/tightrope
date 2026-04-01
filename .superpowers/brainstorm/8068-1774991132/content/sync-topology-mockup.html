@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Topology — Design Mockup</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #131514;
+    --surface-1: #191b19;
+    --surface-2: #1e201e;
+    --surface-3: #242624;
+    --recessed: #111311;
+    --border: rgba(255,255,255,0.06);
+    --border-strong: rgba(255,255,255,0.1);
+    --text: #cdd0ca;
+    --text-secondary: #7d817a;
+    --text-tertiary: #575b55;
+    --accent: #7aab9c;
+    --accent-dim: rgba(122,171,156,0.08);
+    --accent-border: rgba(122,171,156,0.2);
+    --ok: #6a9e78;
+    --warn: #b08f4e;
+    --danger: #a25a4f;
+    --radius-sm: 3px;
+    --radius-md: 5px;
+    --radius-lg: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .page-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .page-header h1 {
+    font-size: 14px;
+    font-weight: 550;
+    letter-spacing: -0.01em;
+  }
+
+  .page-header .eyebrow {
+    font-size: 10.5px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    margin-bottom: 2px;
+  }
+
+  .cluster-meta {
+    display: flex;
+    gap: 1.2rem;
+    align-items: center;
+    font-size: 11.5px;
+  }
+
+  .cluster-meta .chip {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--text-secondary);
+  }
+
+  .cluster-meta .chip strong {
+    color: var(--text);
+    font-weight: 500;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+  }
+
+  .cluster-meta .chip.leader-chip strong {
+    color: var(--accent);
+  }
+
+  /* ── Topology Container ── */
+
+  .topology-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    position: relative;
+    min-height: 500px;
+  }
+
+  .topology-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .nodes-layer {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6rem;
+  }
+
+  /* ── Node Card ── */
+
+  .node-card {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    padding: 0.7rem 0.9rem;
+    min-width: 180px;
+    position: relative;
+    transition: border-color 0.3s ease;
+  }
+
+  .node-card.leader {
+    border-color: var(--accent-border);
+    background: linear-gradient(180deg, rgba(122,171,156,0.04) 0%, var(--surface-2) 100%);
+  }
+
+  .node-card.leader::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: var(--radius-lg);
+    background: radial-gradient(ellipse 120% 60% at 50% 0%, rgba(122,171,156,0.08), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .node-card.candidate {
+    border-color: rgba(176,143,78,0.3);
+  }
+
+  .node-card.disconnected {
+    opacity: 0.5;
+    border-style: dashed;
+  }
+
+  .node-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.45rem;
+  }
+
+  .node-site-id {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .role-badge {
+    font-size: 10px;
+    font-weight: 550;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+
+  .role-badge.leader {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+  }
+
+  .role-badge.follower {
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+  }
+
+  .role-badge.candidate {
+    color: var(--warn);
+    background: rgba(176,143,78,0.08);
+    border: 1px solid rgba(176,143,78,0.2);
+  }
+
+  .node-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.2rem 0.8rem;
+  }
+
+  .node-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    font-size: 11px;
+  }
+
+  .node-stat .label {
+    color: var(--text-tertiary);
+    font-size: 10.5px;
+  }
+
+  .node-stat .value {
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    font-weight: 450;
+  }
+
+  .node-stat .value.lag {
+    color: var(--warn);
+  }
+
+  .node-stat .value.synced {
+    color: var(--ok);
+  }
+
+  /* ── Follower Row ── */
+
+  .follower-row {
+    display: flex;
+    gap: 2rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* ── SVG Arrows ── */
+
+  .connection-line {
+    fill: none;
+    stroke: var(--border-strong);
+    stroke-width: 1;
+  }
+
+  .connection-line.active {
+    stroke: var(--accent-border);
+    stroke-width: 1.2;
+  }
+
+  /* Animated arrow (chevron traveling along path) */
+  @keyframes traverse {
+    0% { offset-distance: 0%; opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { offset-distance: 100%; opacity: 0; }
+  }
+
+  .flow-arrow {
+    position: absolute;
+    pointer-events: none;
+    z-index: 3;
+  }
+
+  .flow-arrow svg {
+    width: 14px;
+    height: 10px;
+  }
+
+  /* ── Transfer Label ── */
+
+  .transfer-label {
+    position: absolute;
+    z-index: 4;
+    font-size: 10px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    color: var(--accent);
+    background: var(--bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--accent-border);
+    white-space: nowrap;
+    opacity: 0;
+    animation: labelAppear 2s ease forwards;
+  }
+
+  @keyframes labelAppear {
+    0% { opacity: 0; transform: translateY(2px); }
+    15% { opacity: 1; transform: translateY(0); }
+    85% { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-2px); }
+  }
+
+  /* ── Legend ── */
+
+  .legend {
+    position: absolute;
+    bottom: 1rem;
+    right: 1.5rem;
+    display: flex;
+    gap: 1rem;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .legend-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  /* ── DEMO: Simulated animated arrows ── */
+
+  .demo-arrow-group {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .chevron {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    opacity: 0;
+  }
+
+  .chevron::before {
+    content: '';
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid var(--accent);
+    border-bottom: 1.5px solid var(--accent);
+    transform: rotate(-45deg);
+  }
+
+  .chevron.up::before {
+    transform: rotate(-135deg);
+  }
+
+  @keyframes arrowDown {
+    0% { top: 0%; opacity: 0; }
+    10% { opacity: 0.8; }
+    80% { opacity: 0.8; }
+    100% { top: 85%; opacity: 0; }
+  }
+
+  @keyframes arrowUp {
+    0% { bottom: 0%; opacity: 0; }
+    10% { opacity: 0.6; }
+    80% { opacity: 0.6; }
+    100% { bottom: 85%; opacity: 0; }
+  }
+
+  /* ── Animated demo connections ── */
+
+  .conn-track {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  .conn-track .chev {
+    position: absolute;
+    color: var(--accent);
+    font-size: 9px;
+    opacity: 0;
+    font-family: 'Inter', sans-serif;
+  }
+
+  /* Keyframes for arrow path: leader → follower1 (left) */
+  @keyframes flowToLeft {
+    0%   { left: 50%; top: 0%;  opacity: 0; }
+    8%   { opacity: 0.9; }
+    50%  { left: 20%; top: 50%; opacity: 0.9; }
+    92%  { opacity: 0.9; }
+    100% { left: 10%; top: 100%; opacity: 0; }
+  }
+
+  @keyframes flowToCenter {
+    0%   { left: 50%; top: 0%;  opacity: 0; }
+    8%   { opacity: 0.9; }
+    92%  { opacity: 0.9; }
+    100% { left: 50%; top: 100%; opacity: 0; }
+  }
+
+  @keyframes flowToRight {
+    0%   { left: 50%; top: 0%;  opacity: 0; }
+    8%   { opacity: 0.9; }
+    50%  { left: 80%; top: 50%; opacity: 0.9; }
+    92%  { opacity: 0.9; }
+    100% { left: 90%; top: 100%; opacity: 0; }
+  }
+
+  /* Staggered transfer burst animation */
+  @keyframes burstIn {
+    0% { opacity: 0; transform: scale(0.95); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  .transfer-burst {
+    animation: burstIn 0.3s ease forwards;
+  }
+</style>
+</head>
+<body>
+
+  <!-- Page Header -->
+  <div class="page-header">
+    <div>
+      <p class="eyebrow">Cluster</p>
+      <h1>Database Synchronization</h1>
+    </div>
+    <div class="cluster-meta">
+      <div class="chip leader-chip">
+        <span>Leader</span>
+        <strong>site_a3f8</strong>
+      </div>
+      <div class="chip">
+        <span>Term</span>
+        <strong>14</strong>
+      </div>
+      <div class="chip">
+        <span>Commit</span>
+        <strong>#2,891</strong>
+      </div>
+      <div class="chip">
+        <span>Peers</span>
+        <strong>3 connected</strong>
+      </div>
+      <div class="chip">
+        <span>Journal</span>
+        <strong>1,247 entries</strong>
+      </div>
+    </div>
+  </div>
+
+  <!-- Topology -->
+  <div class="topology-container" id="topology">
+
+    <!-- SVG connection layer -->
+    <svg class="topology-svg" id="svgLayer">
+      <defs>
+        <marker id="arrowHead" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+          <path d="M0,0 L6,2 L0,4" fill="none" stroke="var(--accent)" stroke-width="0.8" />
+        </marker>
+        <marker id="arrowHeadDim" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+          <path d="M0,0 L6,2 L0,4" fill="none" stroke="var(--text-tertiary)" stroke-width="0.8" />
+        </marker>
+      </defs>
+    </svg>
+
+    <div class="nodes-layer" id="nodesLayer">
+      <!-- Leader -->
+      <div class="node-card leader" id="node-leader">
+        <div class="node-header">
+          <span class="node-site-id">site_a3f8</span>
+          <span class="role-badge leader">Leader</span>
+        </div>
+        <div class="node-stats">
+          <div class="node-stat">
+            <span class="label">Commit</span>
+            <span class="value synced">2,891</span>
+          </div>
+          <div class="node-stat">
+            <span class="label">Applied</span>
+            <span class="value">2,891</span>
+          </div>
+          <div class="node-stat">
+            <span class="label">Term</span>
+            <span class="value">14</span>
+          </div>
+          <div class="node-stat">
+            <span class="label">Log</span>
+            <span class="value">2,894</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Followers -->
+      <div class="follower-row" id="followerRow">
+
+        <div class="node-card" id="node-f1">
+          <div class="node-header">
+            <span class="node-site-id">site_b7d2</span>
+            <span class="role-badge follower">Follower</span>
+          </div>
+          <div class="node-stats">
+            <div class="node-stat">
+              <span class="label">Match</span>
+              <span class="value synced">2,891</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Lag</span>
+              <span class="value synced">0</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Heartbeat</span>
+              <span class="value">1s ago</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Probe</span>
+              <span class="value">4ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="node-card" id="node-f2">
+          <div class="node-header">
+            <span class="node-site-id">site_c9e4</span>
+            <span class="role-badge follower">Follower</span>
+          </div>
+          <div class="node-stats">
+            <div class="node-stat">
+              <span class="label">Match</span>
+              <span class="value lag">2,884</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Lag</span>
+              <span class="value lag">7</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Heartbeat</span>
+              <span class="value">3s ago</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Probe</span>
+              <span class="value">12ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="node-card" id="node-f3">
+          <div class="node-header">
+            <span class="node-site-id">site_d1a7</span>
+            <span class="role-badge follower">Follower</span>
+          </div>
+          <div class="node-stats">
+            <div class="node-stat">
+              <span class="label">Match</span>
+              <span class="value synced">2,890</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Lag</span>
+              <span class="value synced">1</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Heartbeat</span>
+              <span class="value">1s ago</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Probe</span>
+              <span class="value">6ms</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--accent)"></div>
+        <span>Active replication</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--warn)"></div>
+        <span>Lagging</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-swatch" style="background:var(--text-tertiary)"></div>
+        <span>Idle</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // ── Draw SVG connections between leader and followers ──
+    const svgLayer = document.getElementById('svgLayer');
+    const leader = document.getElementById('node-leader');
+    const followers = ['node-f1', 'node-f2', 'node-f3'].map(id => document.getElementById(id));
+    const container = document.getElementById('topology');
+
+    function getCenter(el) {
+      const r = el.getBoundingClientRect();
+      const cr = container.getBoundingClientRect();
+      return {
+        x: r.left - cr.left + r.width / 2,
+        y: r.top - cr.top + r.height / 2
+      };
+    }
+
+    function getBottom(el) {
+      const r = el.getBoundingClientRect();
+      const cr = container.getBoundingClientRect();
+      return { x: r.left - cr.left + r.width / 2, y: r.top - cr.top + r.height };
+    }
+
+    function getTop(el) {
+      const r = el.getBoundingClientRect();
+      const cr = container.getBoundingClientRect();
+      return { x: r.left - cr.left + r.width / 2, y: r.top - cr.top };
+    }
+
+    function drawConnections() {
+      // Clear existing
+      while (svgLayer.children.length > 1) svgLayer.removeChild(svgLayer.lastChild);
+
+      const lBottom = getBottom(leader);
+
+      followers.forEach((f, i) => {
+        const fTop = getTop(f);
+
+        // Bezier curve
+        const midY = (lBottom.y + fTop.y) / 2;
+        const d = `M${lBottom.x},${lBottom.y} C${lBottom.x},${midY} ${fTop.x},${midY} ${fTop.x},${fTop.y}`;
+
+        // Static connection line
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('class', 'connection-line' + (i === 1 ? ' active' : ''));
+        path.setAttribute('id', `conn-${i}`);
+        svgLayer.appendChild(path);
+      });
+    }
+
+    drawConnections();
+    window.addEventListener('resize', drawConnections);
+
+    // ── Animate data flow arrows ──
+    // Simulates event-driven bursts: arrows appear when data is transferring
+
+    function createFlowArrow(pathId, direction, payloadLabel) {
+      const path = document.getElementById(pathId);
+      if (!path) return;
+
+      const totalLength = path.getTotalLength();
+      const numChevrons = 3;
+      const stagger = 120; // ms between chevrons
+
+      for (let c = 0; c < numChevrons; c++) {
+        setTimeout(() => {
+          const chevron = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+          const size = 4;
+
+          // Animate along path
+          const duration = 1200;
+          const startTime = performance.now();
+          const forward = direction === 'down';
+
+          function animate(now) {
+            const elapsed = now - startTime;
+            const t = Math.min(elapsed / duration, 1);
+            const dist = forward ? t * totalLength : (1 - t) * totalLength;
+            const point = path.getPointAtLength(dist);
+
+            // Get direction for rotation
+            const nextDist = Math.min(dist + 2, totalLength);
+            const prevDist = Math.max(dist - 2, 0);
+            const p1 = path.getPointAtLength(prevDist);
+            const p2 = path.getPointAtLength(nextDist);
+            const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x) * (180 / Math.PI);
+            const finalAngle = forward ? angle : angle + 180;
+
+            // Draw chevron as a small triangle
+            const rad = (finalAngle * Math.PI) / 180;
+            const tip = { x: point.x + Math.cos(rad) * size, y: point.y + Math.sin(rad) * size };
+            const left = { x: point.x + Math.cos(rad + 2.5) * size * 0.8, y: point.y + Math.sin(rad + 2.5) * size * 0.8 };
+            const right = { x: point.x + Math.cos(rad - 2.5) * size * 0.8, y: point.y + Math.sin(rad - 2.5) * size * 0.8 };
+
+            chevron.setAttribute('points', `${tip.x},${tip.y} ${left.x},${left.y} ${right.x},${right.y}`);
+
+            // Fade in/out
+            let opacity = 1;
+            if (t < 0.1) opacity = t / 0.1;
+            if (t > 0.85) opacity = (1 - t) / 0.15;
+            chevron.setAttribute('fill', direction === 'down' ? `rgba(122,171,156,${opacity})` : `rgba(122,171,156,${opacity * 0.7})`);
+
+            if (t < 1) {
+              requestAnimationFrame(animate);
+            } else {
+              chevron.remove();
+            }
+          }
+
+          svgLayer.appendChild(chevron);
+          requestAnimationFrame(animate);
+        }, c * stagger);
+      }
+
+      // Show payload label at midpoint
+      if (payloadLabel) {
+        setTimeout(() => {
+          const midPoint = path.getPointAtLength(totalLength * 0.5);
+          const label = document.createElement('div');
+          label.className = 'transfer-label';
+          label.textContent = payloadLabel;
+          label.style.left = (midPoint.x + 10) + 'px';
+          label.style.top = (midPoint.y - 8) + 'px';
+          container.appendChild(label);
+          setTimeout(() => label.remove(), 2200);
+        }, 200);
+      }
+    }
+
+    // Simulate periodic transfer bursts
+    function simulateTraffic() {
+      // Leader → Follower 2 (lagging, catching up)
+      createFlowArrow('conn-1', 'down', '7 entries · 2.1 KB');
+
+      setTimeout(() => {
+        // Leader → Follower 3 (nearly synced)
+        createFlowArrow('conn-2', 'down', '1 entry · 340 B');
+      }, 800);
+
+      setTimeout(() => {
+        // Leader → Follower 1 (heartbeat, no data)
+        createFlowArrow('conn-0', 'down', null);
+      }, 2000);
+    }
+
+    // Run traffic simulation on loop
+    simulateTraffic();
+    setInterval(simulateTraffic, 4000);
+  </script>
+
+</body>
+</html>

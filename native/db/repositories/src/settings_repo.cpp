@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS dashboard_settings (
     routing_score_zeta REAL NOT NULL DEFAULT 0.05,
     routing_score_eta REAL NOT NULL DEFAULT 1.0,
     routing_success_rate_rho REAL NOT NULL DEFAULT 2.0,
+    routing_plan_model_pricing_usd_per_million TEXT NOT NULL DEFAULT '',
     sync_cluster_name TEXT NOT NULL DEFAULT 'default',
     sync_site_id INTEGER NOT NULL DEFAULT 1,
     sync_port INTEGER NOT NULL DEFAULT 9400,
@@ -46,6 +47,22 @@ CREATE TABLE IF NOT EXISTS dashboard_settings (
     sync_conflict_resolution TEXT NOT NULL DEFAULT 'lww',
     sync_journal_retention_days INTEGER NOT NULL DEFAULT 30,
     sync_tls_enabled INTEGER NOT NULL DEFAULT 1,
+    sync_require_handshake_auth INTEGER NOT NULL DEFAULT 1,
+    sync_cluster_shared_secret TEXT NOT NULL DEFAULT '',
+    sync_tls_verify_peer INTEGER NOT NULL DEFAULT 1,
+    sync_tls_ca_certificate_path TEXT NOT NULL DEFAULT '',
+    sync_tls_certificate_chain_path TEXT NOT NULL DEFAULT '',
+    sync_tls_private_key_path TEXT NOT NULL DEFAULT '',
+    sync_tls_pinned_peer_certificate_sha256 TEXT NOT NULL DEFAULT '',
+    sync_schema_version INTEGER NOT NULL DEFAULT 1,
+    sync_min_supported_schema_version INTEGER NOT NULL DEFAULT 1,
+    sync_allow_schema_downgrade INTEGER NOT NULL DEFAULT 0,
+    sync_peer_probe_enabled INTEGER NOT NULL DEFAULT 1,
+    sync_peer_probe_interval_ms INTEGER NOT NULL DEFAULT 5000,
+    sync_peer_probe_timeout_ms INTEGER NOT NULL DEFAULT 500,
+    sync_peer_probe_max_per_refresh INTEGER NOT NULL DEFAULT 2,
+    sync_peer_probe_fail_closed INTEGER NOT NULL DEFAULT 1,
+    sync_peer_probe_fail_closed_failures INTEGER NOT NULL DEFAULT 3,
     totp_last_verified_step INTEGER,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -68,6 +85,7 @@ SET
     routing_score_zeta = COALESCE(routing_score_zeta, 0.05),
     routing_score_eta = COALESCE(routing_score_eta, 1.0),
     routing_success_rate_rho = COALESCE(routing_success_rate_rho, 2.0),
+    routing_plan_model_pricing_usd_per_million = COALESCE(routing_plan_model_pricing_usd_per_million, ''),
     sync_cluster_name = COALESCE(sync_cluster_name, 'default'),
     sync_site_id = COALESCE(sync_site_id, 1),
     sync_port = COALESCE(sync_port, 9400),
@@ -75,7 +93,23 @@ SET
     sync_interval_seconds = COALESCE(sync_interval_seconds, 5),
     sync_conflict_resolution = COALESCE(sync_conflict_resolution, 'lww'),
     sync_journal_retention_days = COALESCE(sync_journal_retention_days, 30),
-    sync_tls_enabled = COALESCE(sync_tls_enabled, 1)
+    sync_tls_enabled = COALESCE(sync_tls_enabled, 1),
+    sync_require_handshake_auth = COALESCE(sync_require_handshake_auth, 1),
+    sync_cluster_shared_secret = COALESCE(sync_cluster_shared_secret, ''),
+    sync_tls_verify_peer = COALESCE(sync_tls_verify_peer, 1),
+    sync_tls_ca_certificate_path = COALESCE(sync_tls_ca_certificate_path, ''),
+    sync_tls_certificate_chain_path = COALESCE(sync_tls_certificate_chain_path, ''),
+    sync_tls_private_key_path = COALESCE(sync_tls_private_key_path, ''),
+    sync_tls_pinned_peer_certificate_sha256 = COALESCE(sync_tls_pinned_peer_certificate_sha256, ''),
+    sync_schema_version = COALESCE(sync_schema_version, 1),
+    sync_min_supported_schema_version = COALESCE(sync_min_supported_schema_version, 1),
+    sync_allow_schema_downgrade = COALESCE(sync_allow_schema_downgrade, 0),
+    sync_peer_probe_enabled = COALESCE(sync_peer_probe_enabled, 1),
+    sync_peer_probe_interval_ms = COALESCE(sync_peer_probe_interval_ms, 5000),
+    sync_peer_probe_timeout_ms = COALESCE(sync_peer_probe_timeout_ms, 500),
+    sync_peer_probe_max_per_refresh = COALESCE(sync_peer_probe_max_per_refresh, 2),
+    sync_peer_probe_fail_closed = COALESCE(sync_peer_probe_fail_closed, 1),
+    sync_peer_probe_fail_closed_failures = COALESCE(sync_peer_probe_fail_closed_failures, 3)
 WHERE id = 1;
 )SQL";
 
@@ -189,6 +223,12 @@ bool ensure_schema(SQLite::Database& db) noexcept {
         !sqlite_repo_utils::ensure_column(
             db,
             "dashboard_settings",
+            "routing_plan_model_pricing_usd_per_million",
+            "ALTER TABLE dashboard_settings ADD COLUMN routing_plan_model_pricing_usd_per_million TEXT NOT NULL DEFAULT '';"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
             "sync_cluster_name",
             "ALTER TABLE dashboard_settings ADD COLUMN sync_cluster_name TEXT NOT NULL DEFAULT 'default';"
         ) ||
@@ -233,6 +273,102 @@ bool ensure_schema(SQLite::Database& db) noexcept {
             "dashboard_settings",
             "sync_tls_enabled",
             "ALTER TABLE dashboard_settings ADD COLUMN sync_tls_enabled INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_require_handshake_auth",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_require_handshake_auth INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_cluster_shared_secret",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_cluster_shared_secret TEXT NOT NULL DEFAULT '';"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_tls_verify_peer",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_tls_verify_peer INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_tls_ca_certificate_path",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_tls_ca_certificate_path TEXT NOT NULL DEFAULT '';"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_tls_certificate_chain_path",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_tls_certificate_chain_path TEXT NOT NULL DEFAULT '';"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_tls_private_key_path",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_tls_private_key_path TEXT NOT NULL DEFAULT '';"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_tls_pinned_peer_certificate_sha256",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_tls_pinned_peer_certificate_sha256 TEXT NOT NULL DEFAULT '';"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_schema_version",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_schema_version INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_min_supported_schema_version",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_min_supported_schema_version INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_allow_schema_downgrade",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_allow_schema_downgrade INTEGER NOT NULL DEFAULT 0;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_peer_probe_enabled",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_peer_probe_enabled INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_peer_probe_interval_ms",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_peer_probe_interval_ms INTEGER NOT NULL DEFAULT 5000;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_peer_probe_timeout_ms",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_peer_probe_timeout_ms INTEGER NOT NULL DEFAULT 500;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_peer_probe_max_per_refresh",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_peer_probe_max_per_refresh INTEGER NOT NULL DEFAULT 2;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_peer_probe_fail_closed",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_peer_probe_fail_closed INTEGER NOT NULL DEFAULT 1;"
+        ) ||
+        !sqlite_repo_utils::ensure_column(
+            db,
+            "dashboard_settings",
+            "sync_peer_probe_fail_closed_failures",
+            "ALTER TABLE dashboard_settings ADD COLUMN sync_peer_probe_fail_closed_failures INTEGER NOT NULL DEFAULT 3;"
         ) ||
         !sqlite_repo_utils::ensure_column(
             db,
@@ -304,6 +440,7 @@ SELECT
     routing_score_zeta,
     routing_score_eta,
     routing_success_rate_rho,
+    routing_plan_model_pricing_usd_per_million,
     sync_cluster_name,
     sync_site_id,
     sync_port,
@@ -312,6 +449,22 @@ SELECT
     sync_conflict_resolution,
     sync_journal_retention_days,
     sync_tls_enabled,
+    sync_require_handshake_auth,
+    sync_cluster_shared_secret,
+    sync_tls_verify_peer,
+    sync_tls_ca_certificate_path,
+    sync_tls_certificate_chain_path,
+    sync_tls_private_key_path,
+    sync_tls_pinned_peer_certificate_sha256,
+    sync_schema_version,
+    sync_min_supported_schema_version,
+    sync_allow_schema_downgrade,
+    sync_peer_probe_enabled,
+    sync_peer_probe_interval_ms,
+    sync_peer_probe_timeout_ms,
+    sync_peer_probe_max_per_refresh,
+    sync_peer_probe_fail_closed,
+    sync_peer_probe_fail_closed_failures,
     connect_address,
     dashboard_password_hash,
     dashboard_totp_secret,
@@ -372,33 +525,74 @@ LIMIT 1;
         if (!stmt.getColumn(17).isNull()) {
             record.routing_success_rate_rho = stmt.getColumn(17).getDouble();
         }
-        if (const auto sync_cluster_name = sqlite_repo_utils::optional_text(stmt.getColumn(18)); sync_cluster_name.has_value()) {
+        if (const auto value = sqlite_repo_utils::optional_text(stmt.getColumn(18)); value.has_value()) {
+            record.routing_plan_model_pricing_usd_per_million = *value;
+        }
+        if (const auto sync_cluster_name = sqlite_repo_utils::optional_text(stmt.getColumn(19)); sync_cluster_name.has_value()) {
             record.sync_cluster_name = *sync_cluster_name;
         }
-        if (!stmt.getColumn(19).isNull()) {
-            record.sync_site_id = stmt.getColumn(19).getInt64();
-        }
         if (!stmt.getColumn(20).isNull()) {
-            record.sync_port = stmt.getColumn(20).getInt64();
+            record.sync_site_id = stmt.getColumn(20).getInt64();
         }
-        record.sync_discovery_enabled = to_bool(stmt, 21);
-        if (!stmt.getColumn(22).isNull()) {
-            record.sync_interval_seconds = stmt.getColumn(22).getInt64();
+        if (!stmt.getColumn(21).isNull()) {
+            record.sync_port = stmt.getColumn(21).getInt64();
         }
-        if (const auto sync_conflict_resolution = sqlite_repo_utils::optional_text(stmt.getColumn(23));
+        record.sync_discovery_enabled = to_bool(stmt, 22);
+        if (!stmt.getColumn(23).isNull()) {
+            record.sync_interval_seconds = stmt.getColumn(23).getInt64();
+        }
+        if (const auto sync_conflict_resolution = sqlite_repo_utils::optional_text(stmt.getColumn(24));
             sync_conflict_resolution.has_value()) {
             record.sync_conflict_resolution = *sync_conflict_resolution;
         }
-        if (!stmt.getColumn(24).isNull()) {
-            record.sync_journal_retention_days = stmt.getColumn(24).getInt64();
+        if (!stmt.getColumn(25).isNull()) {
+            record.sync_journal_retention_days = stmt.getColumn(25).getInt64();
         }
-        record.sync_tls_enabled = to_bool(stmt, 25);
-        if (const auto connect_address = sqlite_repo_utils::optional_text(stmt.getColumn(26)); connect_address.has_value()) {
+        record.sync_tls_enabled = to_bool(stmt, 26);
+        record.sync_require_handshake_auth = to_bool(stmt, 27);
+        if (const auto value = sqlite_repo_utils::optional_text(stmt.getColumn(28)); value.has_value()) {
+            record.sync_cluster_shared_secret = *value;
+        }
+        record.sync_tls_verify_peer = to_bool(stmt, 29);
+        if (const auto value = sqlite_repo_utils::optional_text(stmt.getColumn(30)); value.has_value()) {
+            record.sync_tls_ca_certificate_path = *value;
+        }
+        if (const auto value = sqlite_repo_utils::optional_text(stmt.getColumn(31)); value.has_value()) {
+            record.sync_tls_certificate_chain_path = *value;
+        }
+        if (const auto value = sqlite_repo_utils::optional_text(stmt.getColumn(32)); value.has_value()) {
+            record.sync_tls_private_key_path = *value;
+        }
+        if (const auto value = sqlite_repo_utils::optional_text(stmt.getColumn(33)); value.has_value()) {
+            record.sync_tls_pinned_peer_certificate_sha256 = *value;
+        }
+        if (!stmt.getColumn(34).isNull()) {
+            record.sync_schema_version = stmt.getColumn(34).getInt64();
+        }
+        if (!stmt.getColumn(35).isNull()) {
+            record.sync_min_supported_schema_version = stmt.getColumn(35).getInt64();
+        }
+        record.sync_allow_schema_downgrade = to_bool(stmt, 36);
+        record.sync_peer_probe_enabled = to_bool(stmt, 37);
+        if (!stmt.getColumn(38).isNull()) {
+            record.sync_peer_probe_interval_ms = stmt.getColumn(38).getInt64();
+        }
+        if (!stmt.getColumn(39).isNull()) {
+            record.sync_peer_probe_timeout_ms = stmt.getColumn(39).getInt64();
+        }
+        if (!stmt.getColumn(40).isNull()) {
+            record.sync_peer_probe_max_per_refresh = stmt.getColumn(40).getInt64();
+        }
+        record.sync_peer_probe_fail_closed = to_bool(stmt, 41);
+        if (!stmt.getColumn(42).isNull()) {
+            record.sync_peer_probe_fail_closed_failures = stmt.getColumn(42).getInt64();
+        }
+        if (const auto connect_address = sqlite_repo_utils::optional_text(stmt.getColumn(43)); connect_address.has_value()) {
             record.connect_address = *connect_address;
         }
-        record.password_hash = sqlite_repo_utils::optional_text(stmt.getColumn(27));
-        record.totp_secret = sqlite_repo_utils::optional_text(stmt.getColumn(28));
-        record.totp_last_verified_step = sqlite_repo_utils::optional_i64(stmt.getColumn(29));
+        record.password_hash = sqlite_repo_utils::optional_text(stmt.getColumn(44));
+        record.totp_secret = sqlite_repo_utils::optional_text(stmt.getColumn(45));
+        record.totp_last_verified_step = sqlite_repo_utils::optional_i64(stmt.getColumn(46));
         return record;
     } catch (...) {
         return std::nullopt;
@@ -471,6 +665,9 @@ std::optional<DashboardSettingsRecord> update_dashboard_settings(sqlite3* db, co
     if (patch.routing_success_rate_rho.has_value()) {
         next.routing_success_rate_rho = *patch.routing_success_rate_rho;
     }
+    if (patch.routing_plan_model_pricing_usd_per_million.has_value()) {
+        next.routing_plan_model_pricing_usd_per_million = *patch.routing_plan_model_pricing_usd_per_million;
+    }
     if (patch.sync_cluster_name.has_value()) {
         next.sync_cluster_name = *patch.sync_cluster_name;
     }
@@ -494,6 +691,54 @@ std::optional<DashboardSettingsRecord> update_dashboard_settings(sqlite3* db, co
     }
     if (patch.sync_tls_enabled.has_value()) {
         next.sync_tls_enabled = *patch.sync_tls_enabled;
+    }
+    if (patch.sync_require_handshake_auth.has_value()) {
+        next.sync_require_handshake_auth = *patch.sync_require_handshake_auth;
+    }
+    if (patch.sync_cluster_shared_secret.has_value()) {
+        next.sync_cluster_shared_secret = *patch.sync_cluster_shared_secret;
+    }
+    if (patch.sync_tls_verify_peer.has_value()) {
+        next.sync_tls_verify_peer = *patch.sync_tls_verify_peer;
+    }
+    if (patch.sync_tls_ca_certificate_path.has_value()) {
+        next.sync_tls_ca_certificate_path = *patch.sync_tls_ca_certificate_path;
+    }
+    if (patch.sync_tls_certificate_chain_path.has_value()) {
+        next.sync_tls_certificate_chain_path = *patch.sync_tls_certificate_chain_path;
+    }
+    if (patch.sync_tls_private_key_path.has_value()) {
+        next.sync_tls_private_key_path = *patch.sync_tls_private_key_path;
+    }
+    if (patch.sync_tls_pinned_peer_certificate_sha256.has_value()) {
+        next.sync_tls_pinned_peer_certificate_sha256 = *patch.sync_tls_pinned_peer_certificate_sha256;
+    }
+    if (patch.sync_schema_version.has_value()) {
+        next.sync_schema_version = *patch.sync_schema_version;
+    }
+    if (patch.sync_min_supported_schema_version.has_value()) {
+        next.sync_min_supported_schema_version = *patch.sync_min_supported_schema_version;
+    }
+    if (patch.sync_allow_schema_downgrade.has_value()) {
+        next.sync_allow_schema_downgrade = *patch.sync_allow_schema_downgrade;
+    }
+    if (patch.sync_peer_probe_enabled.has_value()) {
+        next.sync_peer_probe_enabled = *patch.sync_peer_probe_enabled;
+    }
+    if (patch.sync_peer_probe_interval_ms.has_value()) {
+        next.sync_peer_probe_interval_ms = *patch.sync_peer_probe_interval_ms;
+    }
+    if (patch.sync_peer_probe_timeout_ms.has_value()) {
+        next.sync_peer_probe_timeout_ms = *patch.sync_peer_probe_timeout_ms;
+    }
+    if (patch.sync_peer_probe_max_per_refresh.has_value()) {
+        next.sync_peer_probe_max_per_refresh = *patch.sync_peer_probe_max_per_refresh;
+    }
+    if (patch.sync_peer_probe_fail_closed.has_value()) {
+        next.sync_peer_probe_fail_closed = *patch.sync_peer_probe_fail_closed;
+    }
+    if (patch.sync_peer_probe_fail_closed_failures.has_value()) {
+        next.sync_peer_probe_fail_closed_failures = *patch.sync_peer_probe_fail_closed_failures;
     }
     if (patch.connect_address.has_value()) {
         next.connect_address = *patch.connect_address;
@@ -520,18 +765,35 @@ SET
     routing_score_zeta = ?16,
     routing_score_eta = ?17,
     routing_success_rate_rho = ?18,
-    sync_cluster_name = ?19,
-    sync_site_id = ?20,
-    sync_port = ?21,
-    sync_discovery_enabled = ?22,
-    sync_interval_seconds = ?23,
-    sync_conflict_resolution = ?24,
-    sync_journal_retention_days = ?25,
-    sync_tls_enabled = ?26,
-    connect_address = ?27,
-    dashboard_password_hash = ?28,
-    dashboard_totp_secret = ?29,
-    totp_last_verified_step = ?30,
+    routing_plan_model_pricing_usd_per_million = ?19,
+    sync_cluster_name = ?20,
+    sync_site_id = ?21,
+    sync_port = ?22,
+    sync_discovery_enabled = ?23,
+    sync_interval_seconds = ?24,
+    sync_conflict_resolution = ?25,
+    sync_journal_retention_days = ?26,
+    sync_tls_enabled = ?27,
+    sync_require_handshake_auth = ?28,
+    sync_cluster_shared_secret = ?29,
+    sync_tls_verify_peer = ?30,
+    sync_tls_ca_certificate_path = ?31,
+    sync_tls_certificate_chain_path = ?32,
+    sync_tls_private_key_path = ?33,
+    sync_tls_pinned_peer_certificate_sha256 = ?34,
+    sync_schema_version = ?35,
+    sync_min_supported_schema_version = ?36,
+    sync_allow_schema_downgrade = ?37,
+    sync_peer_probe_enabled = ?38,
+    sync_peer_probe_interval_ms = ?39,
+    sync_peer_probe_timeout_ms = ?40,
+    sync_peer_probe_max_per_refresh = ?41,
+    sync_peer_probe_fail_closed = ?42,
+    sync_peer_probe_fail_closed_failures = ?43,
+    connect_address = ?44,
+    dashboard_password_hash = ?45,
+    dashboard_totp_secret = ?46,
+    totp_last_verified_step = ?47,
     updated_at = datetime('now')
 WHERE id = 1;
 )SQL";
@@ -556,23 +818,40 @@ WHERE id = 1;
         stmt.bind(16, next.routing_score_zeta);
         stmt.bind(17, next.routing_score_eta);
         stmt.bind(18, next.routing_success_rate_rho);
-        stmt.bind(19, next.sync_cluster_name);
-        stmt.bind(20, next.sync_site_id);
-        stmt.bind(21, next.sync_port);
-        stmt.bind(22, next.sync_discovery_enabled ? 1 : 0);
-        stmt.bind(23, next.sync_interval_seconds);
-        stmt.bind(24, next.sync_conflict_resolution);
-        stmt.bind(25, next.sync_journal_retention_days);
-        stmt.bind(26, next.sync_tls_enabled ? 1 : 0);
-        stmt.bind(27, next.connect_address);
-        if (!sqlite_repo_utils::bind_optional_text(stmt, 28, next.password_hash) ||
-            !sqlite_repo_utils::bind_optional_text(stmt, 29, next.totp_secret)) {
+        stmt.bind(19, next.routing_plan_model_pricing_usd_per_million);
+        stmt.bind(20, next.sync_cluster_name);
+        stmt.bind(21, next.sync_site_id);
+        stmt.bind(22, next.sync_port);
+        stmt.bind(23, next.sync_discovery_enabled ? 1 : 0);
+        stmt.bind(24, next.sync_interval_seconds);
+        stmt.bind(25, next.sync_conflict_resolution);
+        stmt.bind(26, next.sync_journal_retention_days);
+        stmt.bind(27, next.sync_tls_enabled ? 1 : 0);
+        stmt.bind(28, next.sync_require_handshake_auth ? 1 : 0);
+        stmt.bind(29, next.sync_cluster_shared_secret);
+        stmt.bind(30, next.sync_tls_verify_peer ? 1 : 0);
+        stmt.bind(31, next.sync_tls_ca_certificate_path);
+        stmt.bind(32, next.sync_tls_certificate_chain_path);
+        stmt.bind(33, next.sync_tls_private_key_path);
+        stmt.bind(34, next.sync_tls_pinned_peer_certificate_sha256);
+        stmt.bind(35, next.sync_schema_version);
+        stmt.bind(36, next.sync_min_supported_schema_version);
+        stmt.bind(37, next.sync_allow_schema_downgrade ? 1 : 0);
+        stmt.bind(38, next.sync_peer_probe_enabled ? 1 : 0);
+        stmt.bind(39, next.sync_peer_probe_interval_ms);
+        stmt.bind(40, next.sync_peer_probe_timeout_ms);
+        stmt.bind(41, next.sync_peer_probe_max_per_refresh);
+        stmt.bind(42, next.sync_peer_probe_fail_closed ? 1 : 0);
+        stmt.bind(43, next.sync_peer_probe_fail_closed_failures);
+        stmt.bind(44, next.connect_address);
+        if (!sqlite_repo_utils::bind_optional_text(stmt, 45, next.password_hash) ||
+            !sqlite_repo_utils::bind_optional_text(stmt, 46, next.totp_secret)) {
             return std::nullopt;
         }
         if (!next.totp_last_verified_step.has_value()) {
-            stmt.bind(30);
+            stmt.bind(47);
         } else {
-            stmt.bind(30, *next.totp_last_verified_step);
+            stmt.bind(47, *next.totp_last_verified_step);
         }
         (void)stmt.exec();
     } catch (...) {

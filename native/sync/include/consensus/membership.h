@@ -24,6 +24,7 @@ public:
     bool begin_joint_consensus(std::vector<std::uint32_t> next_members);
     bool commit_joint_consensus();
     bool in_joint_consensus() const;
+    void reset_members(std::vector<std::uint32_t> members);
 
 private:
     static std::vector<std::uint32_t> normalize(std::vector<std::uint32_t> members);

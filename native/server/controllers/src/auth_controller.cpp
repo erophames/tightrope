@@ -1,27 +1,31 @@
 #include "auth_controller.h"
 
-#include <chrono>
 #include <unordered_map>
 
 #include "dashboard/password_auth.h"
 #include "dashboard/session_manager.h"
 #include "dashboard/totp_auth.h"
 #include "controller_db.h"
+#include "linearizable_read_guard.h"
 #include "text/ascii.h"
 #include "repositories/settings_repo.h"
+#include "time/clock.h"
 
 namespace tightrope::server::controllers {
 
 namespace {
 
+core::time::Clock& runtime_clock() {
+    static core::time::SystemClock clock;
+    return clock;
+}
+
 std::int64_t now_ms() {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return runtime_clock().unix_ms_now();
 }
 
 std::int64_t now_unix_seconds() {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::seconds>(now).count();
+    return now_ms() / 1000;
 }
 
 auth::dashboard::DashboardSessionManager& session_manager() {
@@ -85,9 +89,25 @@ DashboardAuthResponse auth_required() {
     };
 }
 
+std::optional<DashboardAuthResponse> linearizable_settings_guard() {
+    const auto guard = check_linearizable_read_access("dashboard_settings");
+    if (guard.allow) {
+        return std::nullopt;
+    }
+    return DashboardAuthResponse{
+        .status = guard.status,
+        .code = guard.code,
+        .message = guard.message,
+    };
+}
+
 } // namespace
 
 DashboardAuthResponse get_dashboard_auth_session(const std::string_view session_id, sqlite3* db) {
+    if (const auto guard = linearizable_settings_guard(); guard.has_value()) {
+        return *guard;
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return db_unavailable();
@@ -106,6 +126,10 @@ DashboardAuthResponse get_dashboard_auth_session(const std::string_view session_
 }
 
 DashboardAuthResponse setup_dashboard_password(const std::string_view password, sqlite3* db) {
+    if (const auto guard = linearizable_settings_guard(); guard.has_value()) {
+        return *guard;
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return db_unavailable();
@@ -156,6 +180,10 @@ DashboardAuthResponse setup_dashboard_password(const std::string_view password, 
 }
 
 DashboardAuthResponse login_dashboard_password(const std::string_view password, sqlite3* db) {
+    if (const auto guard = linearizable_settings_guard(); guard.has_value()) {
+        return *guard;
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return db_unavailable();
@@ -188,6 +216,14 @@ DashboardAuthResponse login_dashboard_password(const std::string_view password, 
 }
 
 TotpSetupStartResponse start_totp_setup(const std::string_view session_id, sqlite3* db) {
+    if (const auto guard = linearizable_settings_guard(); guard.has_value()) {
+        return {
+            .status = guard->status,
+            .code = guard->code,
+            .message = guard->message,
+        };
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return {
@@ -241,6 +277,10 @@ TotpSetupStartResponse start_totp_setup(const std::string_view session_id, sqlit
 
 DashboardAuthResponse
 confirm_totp_setup(const std::string_view session_id, const std::string_view secret, const std::string_view code, sqlite3* db) {
+    if (const auto guard = linearizable_settings_guard(); guard.has_value()) {
+        return *guard;
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return db_unavailable();
@@ -280,6 +320,10 @@ confirm_totp_setup(const std::string_view session_id, const std::string_view sec
 }
 
 DashboardAuthResponse verify_dashboard_totp(const std::string_view session_id, const std::string_view code, sqlite3* db) {
+    if (const auto guard = linearizable_settings_guard(); guard.has_value()) {
+        return *guard;
+    }
+
     auto handle = open_controller_db(db);
     if (handle.db == nullptr) {
         return db_unavailable();

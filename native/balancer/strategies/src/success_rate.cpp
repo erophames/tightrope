@@ -3,9 +3,19 @@
 #include "math/clamp.h"
 
 #include <cmath>
+#include <mutex>
 #include <vector>
 
 namespace tightrope::balancer {
+
+namespace {
+
+std::mutex& success_rate_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+} // namespace
 
 double success_probability(const AccountCandidate& account, const double epsilon) {
     const auto clamped_epsilon = tightrope::core::math::clamp_non_negative(epsilon);
@@ -32,6 +42,7 @@ const AccountCandidate* SuccessRateWeightedPicker::pick(CandidateView eligible_a
     if (eligible_accounts.empty()) {
         return nullptr;
     }
+    const std::lock_guard<std::mutex> lock(success_rate_mutex());
 
     std::vector<double> weights;
     weights.reserve(eligible_accounts.size());

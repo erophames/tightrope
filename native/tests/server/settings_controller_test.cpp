@@ -42,6 +42,7 @@ TEST_CASE("settings controller returns defaults and supports updates", "[server]
     REQUIRE(initial.settings.routing_score_zeta == Catch::Approx(0.05));
     REQUIRE(initial.settings.routing_score_eta == Catch::Approx(1.0));
     REQUIRE(initial.settings.routing_success_rate_rho == Catch::Approx(2.0));
+    REQUIRE(initial.settings.routing_plan_model_pricing_usd_per_million.empty());
     REQUIRE(initial.settings.sync_cluster_name == "default");
     REQUIRE(initial.settings.sync_site_id == 1);
     REQUIRE(initial.settings.sync_port == 9400);
@@ -50,6 +51,22 @@ TEST_CASE("settings controller returns defaults and supports updates", "[server]
     REQUIRE(initial.settings.sync_conflict_resolution == "lww");
     REQUIRE(initial.settings.sync_journal_retention_days == 30);
     REQUIRE(initial.settings.sync_tls_enabled);
+    REQUIRE(initial.settings.sync_require_handshake_auth);
+    REQUIRE(initial.settings.sync_cluster_shared_secret.empty());
+    REQUIRE(initial.settings.sync_tls_verify_peer);
+    REQUIRE(initial.settings.sync_tls_ca_certificate_path.empty());
+    REQUIRE(initial.settings.sync_tls_certificate_chain_path.empty());
+    REQUIRE(initial.settings.sync_tls_private_key_path.empty());
+    REQUIRE(initial.settings.sync_tls_pinned_peer_certificate_sha256.empty());
+    REQUIRE(initial.settings.sync_schema_version == 1);
+    REQUIRE(initial.settings.sync_min_supported_schema_version == 1);
+    REQUIRE_FALSE(initial.settings.sync_allow_schema_downgrade);
+    REQUIRE(initial.settings.sync_peer_probe_enabled);
+    REQUIRE(initial.settings.sync_peer_probe_interval_ms == 5000);
+    REQUIRE(initial.settings.sync_peer_probe_timeout_ms == 500);
+    REQUIRE(initial.settings.sync_peer_probe_max_per_refresh == 2);
+    REQUIRE(initial.settings.sync_peer_probe_fail_closed);
+    REQUIRE(initial.settings.sync_peer_probe_fail_closed_failures == 3);
     REQUIRE_FALSE(initial.settings.totp_configured);
     REQUIRE_FALSE(initial.settings.totp_required_on_login);
 
@@ -72,6 +89,7 @@ TEST_CASE("settings controller returns defaults and supports updates", "[server]
     patch.routing_score_zeta = 0.09;
     patch.routing_score_eta = 0.16;
     patch.routing_success_rate_rho = 2.7;
+    patch.routing_plan_model_pricing_usd_per_million = "plus@gpt-5.4=0.10:0.25,enterprise@*=0.40:0.60";
     patch.sync_cluster_name = "tightrope-prod";
     patch.sync_site_id = 22;
     patch.sync_port = 9577;
@@ -80,6 +98,22 @@ TEST_CASE("settings controller returns defaults and supports updates", "[server]
     patch.sync_conflict_resolution = "site_priority";
     patch.sync_journal_retention_days = 45;
     patch.sync_tls_enabled = false;
+    patch.sync_require_handshake_auth = false;
+    patch.sync_cluster_shared_secret = "top-secret";
+    patch.sync_tls_verify_peer = false;
+    patch.sync_tls_ca_certificate_path = "/tmp/ca.pem";
+    patch.sync_tls_certificate_chain_path = "/tmp/cert-chain.pem";
+    patch.sync_tls_private_key_path = "/tmp/key.pem";
+    patch.sync_tls_pinned_peer_certificate_sha256 = "00aa";
+    patch.sync_schema_version = 3;
+    patch.sync_min_supported_schema_version = 2;
+    patch.sync_allow_schema_downgrade = true;
+    patch.sync_peer_probe_enabled = true;
+    patch.sync_peer_probe_interval_ms = 7000;
+    patch.sync_peer_probe_timeout_ms = 650;
+    patch.sync_peer_probe_max_per_refresh = 4;
+    patch.sync_peer_probe_fail_closed = true;
+    patch.sync_peer_probe_fail_closed_failures = 6;
 
     const auto invalid = tightrope::server::controllers::update_settings(patch, db);
     REQUIRE(invalid.status == 400);
@@ -105,6 +139,7 @@ TEST_CASE("settings controller returns defaults and supports updates", "[server]
     REQUIRE(updated.settings.routing_score_zeta == Catch::Approx(0.09));
     REQUIRE(updated.settings.routing_score_eta == Catch::Approx(0.16));
     REQUIRE(updated.settings.routing_success_rate_rho == Catch::Approx(2.7));
+    REQUIRE(updated.settings.routing_plan_model_pricing_usd_per_million == "plus@gpt-5.4=0.10:0.25,enterprise@*=0.40:0.60");
     REQUIRE(updated.settings.sync_cluster_name == "tightrope-prod");
     REQUIRE(updated.settings.sync_site_id == 22);
     REQUIRE(updated.settings.sync_port == 9577);
@@ -113,6 +148,22 @@ TEST_CASE("settings controller returns defaults and supports updates", "[server]
     REQUIRE(updated.settings.sync_conflict_resolution == "site_priority");
     REQUIRE(updated.settings.sync_journal_retention_days == 45);
     REQUIRE_FALSE(updated.settings.sync_tls_enabled);
+    REQUIRE_FALSE(updated.settings.sync_require_handshake_auth);
+    REQUIRE(updated.settings.sync_cluster_shared_secret == "top-secret");
+    REQUIRE_FALSE(updated.settings.sync_tls_verify_peer);
+    REQUIRE(updated.settings.sync_tls_ca_certificate_path == "/tmp/ca.pem");
+    REQUIRE(updated.settings.sync_tls_certificate_chain_path == "/tmp/cert-chain.pem");
+    REQUIRE(updated.settings.sync_tls_private_key_path == "/tmp/key.pem");
+    REQUIRE(updated.settings.sync_tls_pinned_peer_certificate_sha256 == "00aa");
+    REQUIRE(updated.settings.sync_schema_version == 3);
+    REQUIRE(updated.settings.sync_min_supported_schema_version == 2);
+    REQUIRE(updated.settings.sync_allow_schema_downgrade);
+    REQUIRE(updated.settings.sync_peer_probe_enabled);
+    REQUIRE(updated.settings.sync_peer_probe_interval_ms == 7000);
+    REQUIRE(updated.settings.sync_peer_probe_timeout_ms == 650);
+    REQUIRE(updated.settings.sync_peer_probe_max_per_refresh == 4);
+    REQUIRE(updated.settings.sync_peer_probe_fail_closed);
+    REQUIRE(updated.settings.sync_peer_probe_fail_closed_failures == 6);
 
     sqlite3_close(db);
     std::filesystem::remove(db_path);
@@ -148,6 +199,43 @@ TEST_CASE("settings controller validates sync and routing tuning fields", "[serv
     response = tightrope::server::controllers::update_settings(patch, db);
     REQUIRE(response.status == 400);
     REQUIRE(response.code == "invalid_routing_weight");
+
+    patch = {};
+    patch.routing_plan_model_pricing_usd_per_million = "plus@gpt-5.4=invalid";
+    response = tightrope::server::controllers::update_settings(patch, db);
+    REQUIRE(response.status == 400);
+    REQUIRE(response.code == "invalid_routing_plan_model_pricing_usd_per_million");
+
+    patch = {};
+    patch.sync_schema_version = 2;
+    patch.sync_min_supported_schema_version = 3;
+    response = tightrope::server::controllers::update_settings(patch, db);
+    REQUIRE(response.status == 400);
+    REQUIRE(response.code == "invalid_sync_schema_range");
+
+    patch = {};
+    patch.sync_peer_probe_interval_ms = 99;
+    response = tightrope::server::controllers::update_settings(patch, db);
+    REQUIRE(response.status == 400);
+    REQUIRE(response.code == "invalid_sync_peer_probe_interval_ms");
+
+    patch = {};
+    patch.sync_peer_probe_timeout_ms = 49;
+    response = tightrope::server::controllers::update_settings(patch, db);
+    REQUIRE(response.status == 400);
+    REQUIRE(response.code == "invalid_sync_peer_probe_timeout_ms");
+
+    patch = {};
+    patch.sync_peer_probe_max_per_refresh = 0;
+    response = tightrope::server::controllers::update_settings(patch, db);
+    REQUIRE(response.status == 400);
+    REQUIRE(response.code == "invalid_sync_peer_probe_max_per_refresh");
+
+    patch = {};
+    patch.sync_peer_probe_fail_closed_failures = 0;
+    response = tightrope::server::controllers::update_settings(patch, db);
+    REQUIRE(response.status == 400);
+    REQUIRE(response.code == "invalid_sync_peer_probe_fail_closed_failures");
 
     sqlite3_close(db);
     std::filesystem::remove(db_path);

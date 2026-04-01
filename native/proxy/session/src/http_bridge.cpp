@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -15,6 +14,7 @@
 
 #include "session_bridge.h"
 #include "text/ascii.h"
+#include "time/clock.h"
 
 namespace tightrope::proxy::session {
 
@@ -40,9 +40,13 @@ std::mutex& http_bridge_mutex() {
     return *value;
 }
 
+core::time::Clock& runtime_clock() {
+    static core::time::SystemClock clock;
+    return clock;
+}
+
 std::int64_t now_ms() {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return runtime_clock().unix_ms_now();
 }
 
 std::string find_header_case_insensitive(const openai::HeaderMap& headers, const std::string_view key) {

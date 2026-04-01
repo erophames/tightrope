@@ -1,0 +1,5 @@
+  What’s left on the fix doc (current top priorities)
+
+  1. P6-1/P6-2/P6-6 interop/fail-closed policy hardening + richer transport attribution.
+  2. P1 rollout/cleanup polish (clock/EWMA breadth + pricing freshness ops cadence).
+  3. P6-4/P6-5 external alert hooks/runbook integration (beyond in-cluster summary).

@@ -14,6 +14,7 @@ std::string DashboardSessionManager::create(
     const bool totp_verified,
     const std::int64_t now_ms
 ) {
+    const std::lock_guard<std::mutex> lock(mutex_);
     const auto session_id = boost::uuids::to_string(boost::uuids::random_generator()());
     sessions_[session_id] = DashboardSessionState{
         .expires_at_ms = now_ms + ttl_ms_,
@@ -30,6 +31,7 @@ std::optional<DashboardSessionState> DashboardSessionManager::get(
     if (session_id.empty()) {
         return std::nullopt;
     }
+    const std::lock_guard<std::mutex> lock(mutex_);
     const auto it = sessions_.find(std::string(session_id));
     if (it == sessions_.end()) {
         return std::nullopt;
@@ -44,10 +46,12 @@ void DashboardSessionManager::erase(const std::string_view session_id) {
     if (session_id.empty()) {
         return;
     }
+    const std::lock_guard<std::mutex> lock(mutex_);
     sessions_.erase(std::string(session_id));
 }
 
 std::size_t DashboardSessionManager::purge_expired(const std::int64_t now_ms) {
+    const std::lock_guard<std::mutex> lock(mutex_);
     std::size_t removed = 0;
     for (auto it = sessions_.begin(); it != sessions_.end();) {
         if (now_ms >= it->second.expires_at_ms) {

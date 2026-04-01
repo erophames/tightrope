@@ -5,7 +5,6 @@
 
 #include "text/json_escape.h"
 #include "consensus/logging.h"
-#include "consensus/nuraft_backend.h"
 
 namespace tightrope::sync::consensus {
 
@@ -24,12 +23,12 @@ std::vector<std::uint32_t> build_members(const std::uint32_t node_id, const std:
 } // namespace
 
 RaftNode::RaftNode(const std::uint32_t node_id, std::vector<std::uint32_t> peers, const std::uint16_t port_base,
-                   std::string storage_base_dir)
+                   std::string storage_base_dir, BackendOptions backend_options)
     : node_id_(node_id),
       membership_(build_members(node_id, peers)),
       port_base_(port_base),
       backend_(std::make_unique<nuraft_backend::Backend>(
-          node_id_, membership_.members(), port_base_, std::move(storage_base_dir))) {}
+          node_id_, membership_.members(), port_base_, std::move(storage_base_dir), std::move(backend_options))) {}
 
 RaftNode::~RaftNode() {
     stop();
@@ -134,6 +133,54 @@ std::optional<std::uint64_t> RaftNode::propose(const LogEntryData& data) {
     }
     refresh_state_cache();
     return index;
+}
+
+bool RaftNode::add_member(const std::uint32_t node_id, std::string endpoint, std::string* error) {
+    auto set_error = [&error](std::string message) {
+        if (error != nullptr) {
+            *error = std::move(message);
+        }
+    };
+
+    if (backend_ == nullptr) {
+        set_error("raft backend unavailable");
+        return false;
+    }
+    if (!backend_->add_server(node_id, std::move(endpoint), error)) {
+        log_consensus_event(
+            ConsensusLogLevel::Warning,
+            "raft_node",
+            "add_member_rejected",
+            "node=" + std::to_string(node_id_) + " target=" + std::to_string(node_id));
+        return false;
+    }
+    membership_.reset_members(backend_->server_ids());
+    refresh_state_cache();
+    return true;
+}
+
+bool RaftNode::remove_member(const std::uint32_t node_id, std::string* error) {
+    auto set_error = [&error](std::string message) {
+        if (error != nullptr) {
+            *error = std::move(message);
+        }
+    };
+
+    if (backend_ == nullptr) {
+        set_error("raft backend unavailable");
+        return false;
+    }
+    if (!backend_->remove_server(node_id, error)) {
+        log_consensus_event(
+            ConsensusLogLevel::Warning,
+            "raft_node",
+            "remove_member_rejected",
+            "node=" + std::to_string(node_id_) + " target=" + std::to_string(node_id));
+        return false;
+    }
+    membership_.reset_members(backend_->server_ids());
+    refresh_state_cache();
+    return true;
 }
 
 std::uint64_t RaftNode::maybe_advance_commit() const {

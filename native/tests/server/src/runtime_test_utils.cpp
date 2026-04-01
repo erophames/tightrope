@@ -81,6 +81,26 @@ int unset_env_var(const char* key) {
 #endif
 }
 
+bool can_bind_loopback_port(const std::uint16_t port) {
+    SocketHandle fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == kInvalidSocket) {
+        return false;
+    }
+
+    sockaddr_in address{};
+    std::memset(&address, 0, sizeof(address));
+#if defined(__APPLE__)
+    address.sin_len = static_cast<__uint8_t>(sizeof(address));
+#endif
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(port);
+
+    const bool ok = ::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0;
+    close_socket(fd);
+    return ok;
+}
+
 } // namespace
 
 std::uint16_t next_runtime_port() {
@@ -88,41 +108,26 @@ std::uint16_t next_runtime_port() {
         return 0;
     }
 
-    SocketHandle fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd != kInvalidSocket) {
-        sockaddr_in address{};
-        std::memset(&address, 0, sizeof(address));
-#if defined(__APPLE__)
-        address.sin_len = static_cast<__uint8_t>(sizeof(address));
-#endif
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        address.sin_port = 0;
+    // Use a dedicated server-port range instead of ephemeral ports to avoid
+    // collisions with client-side ephemeral socket allocations in tests.
+    constexpr std::uint16_t kPortRangeStart = 28000;
+    constexpr std::uint16_t kPortRangeEnd = 46000;
+    constexpr std::uint32_t kPortSpan = static_cast<std::uint32_t>(kPortRangeEnd - kPortRangeStart + 1);
 
-        if (::bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0) {
-            sockaddr_in bound{};
-#if defined(_WIN32)
-            int bound_len = static_cast<int>(sizeof(bound));
-#else
-            socklen_t bound_len = sizeof(bound);
-#endif
-            if (::getsockname(fd, reinterpret_cast<sockaddr*>(&bound), &bound_len) == 0) {
-                const auto selected_port = static_cast<std::uint16_t>(ntohs(bound.sin_port));
-                close_socket(fd);
-                if (selected_port != 0) {
-                    return selected_port;
-                }
-            }
+    const auto seed = static_cast<std::uint32_t>(
+        (static_cast<std::uint32_t>(current_pid()) * 131U) % kPortSpan
+    );
+    static std::atomic<std::uint32_t> cursor{seed};
+
+    for (std::uint32_t attempts = 0; attempts < kPortSpan; ++attempts) {
+        const auto next = cursor.fetch_add(1, std::memory_order_relaxed);
+        const auto candidate = static_cast<std::uint16_t>(kPortRangeStart + (next % kPortSpan));
+        if (can_bind_loopback_port(candidate)) {
+            return candidate;
         }
-        close_socket(fd);
     }
 
-    // Fallback for environments where ephemeral bind probing is unavailable.
-    const auto fallback_seed = static_cast<std::uint16_t>(
-        40000 + (static_cast<std::uint16_t>(current_pid()) % static_cast<std::uint16_t>(20000))
-    );
-    static std::atomic<std::uint16_t> fallback_port{fallback_seed};
-    return static_cast<std::uint16_t>(fallback_port.fetch_add(17));
+    return 0;
 }
 
 std::string make_temp_runtime_db_path() {

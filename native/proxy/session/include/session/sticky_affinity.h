@@ -12,6 +12,7 @@ namespace tightrope::proxy::session {
 struct StickyAffinityResolution {
     std::string sticky_key;
     std::string account_id;
+    std::string request_model;
     bool from_header = false;
     bool from_persistence = false;
 };
@@ -26,8 +27,10 @@ StickyAffinityResolution
 resolve_sticky_affinity(const std::string& raw_request_body, const openai::HeaderMap& inbound_headers);
 void persist_sticky_affinity(const StickyAffinityResolution& resolution);
 std::optional<UpstreamAccountCredentials> resolve_upstream_account_credentials(
-    std::string_view preferred_account_id
+    std::string_view preferred_account_id,
+    std::string_view request_model = {}
 );
 std::optional<UpstreamAccountCredentials> refresh_upstream_account_credentials(std::string_view account_id);
+bool mark_upstream_account_unusable(std::string_view account_id);
 
 } // namespace tightrope::proxy::session

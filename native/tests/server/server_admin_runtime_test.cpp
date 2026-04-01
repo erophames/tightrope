@@ -88,6 +88,7 @@ TEST_CASE("uwebsockets runtime serves settings endpoints", "[server][runtime][ad
     REQUIRE(initial.find("\"routingStrategy\"") != std::string::npos);
     REQUIRE(initial.find("\"syncClusterName\"") != std::string::npos);
     REQUIRE(initial.find("\"routingScoreAlpha\"") != std::string::npos);
+    REQUIRE(initial.find("\"routingPlanModelPricingUsdPerMillion\":\"\"") != std::string::npos);
 
     const std::string patch_body =
         R"({"theme":"dark","stickyThreadsEnabled":true,"upstreamStreamTransport":"websocket","preferEarlierResetAccounts":true,)"
@@ -95,9 +96,18 @@ TEST_CASE("uwebsockets runtime serves settings endpoints", "[server][runtime][ad
         R"("totpRequiredOnLogin":false,"apiKeyAuthEnabled":true,"routingScoreAlpha":0.22,)"
         R"("routingScoreBeta":0.2,"routingScoreGamma":0.19,"routingScoreDelta":0.18,)"
         R"("routingScoreZeta":0.12,"routingScoreEta":0.09,"routingHeadroomWeightPrimary":0.4,)"
-        R"("routingHeadroomWeightSecondary":0.6,"routingSuccessRateRho":2.5,"syncClusterName":"cluster-test",)"
+        R"("routingHeadroomWeightSecondary":0.6,"routingSuccessRateRho":2.5,)"
+        R"("routingPlanModelPricingUsdPerMillion":"plus@gpt-5.4=0.10:0.25,pro@*=0.20:0.35","syncClusterName":"cluster-test",)"
         R"("syncSiteId":44,"syncPort":9901,"syncDiscoveryEnabled":false,"syncIntervalSeconds":11,)"
-        R"("syncConflictResolution":"field_merge","syncJournalRetentionDays":60,"syncTlsEnabled":false})";
+        R"("syncConflictResolution":"field_merge","syncJournalRetentionDays":60,"syncTlsEnabled":false,)"
+        R"("syncRequireHandshakeAuth":false,"syncClusterSharedSecret":"cluster-secret",)"
+        R"("syncTlsVerifyPeer":false,"syncTlsCaCertificatePath":"/tmp/ca.pem",)"
+        R"("syncTlsCertificateChainPath":"/tmp/cert-chain.pem","syncTlsPrivateKeyPath":"/tmp/key.pem",)"
+        R"("syncTlsPinnedPeerCertificateSha256":"ab","syncSchemaVersion":3,)"
+        R"("syncMinSupportedSchemaVersion":2,"syncAllowSchemaDowngrade":true,)"
+        R"("syncPeerProbeEnabled":true,"syncPeerProbeIntervalMs":7000,)"
+        R"("syncPeerProbeTimeoutMs":650,"syncPeerProbeMaxPerRefresh":4,)"
+        R"("syncPeerProbeFailClosed":true,"syncPeerProbeFailClosedFailures":6})";
     const auto updated = tightrope::tests::server::send_raw_http(
         port,
         "PUT /api/settings HTTP/1.1\r\n"
@@ -113,10 +123,26 @@ TEST_CASE("uwebsockets runtime serves settings endpoints", "[server][runtime][ad
     REQUIRE(updated.find("\"routingStrategy\":\"round_robin\"") != std::string::npos);
     REQUIRE(updated.find("\"apiKeyAuthEnabled\":true") != std::string::npos);
     REQUIRE(updated.find("\"routingScoreAlpha\":0.22") != std::string::npos);
+    REQUIRE(
+        updated.find("\"routingPlanModelPricingUsdPerMillion\":\"plus@gpt-5.4=0.10:0.25,pro@*=0.20:0.35\"") !=
+        std::string::npos
+    );
     REQUIRE(updated.find("\"syncClusterName\":\"cluster-test\"") != std::string::npos);
     REQUIRE(updated.find("\"syncSiteId\":44") != std::string::npos);
     REQUIRE(updated.find("\"syncConflictResolution\":\"field_merge\"") != std::string::npos);
     REQUIRE(updated.find("\"syncTlsEnabled\":false") != std::string::npos);
+    REQUIRE(updated.find("\"syncRequireHandshakeAuth\":false") != std::string::npos);
+    REQUIRE(updated.find("\"syncClusterSharedSecret\":\"cluster-secret\"") != std::string::npos);
+    REQUIRE(updated.find("\"syncTlsVerifyPeer\":false") != std::string::npos);
+    REQUIRE(updated.find("\"syncSchemaVersion\":3") != std::string::npos);
+    REQUIRE(updated.find("\"syncMinSupportedSchemaVersion\":2") != std::string::npos);
+    REQUIRE(updated.find("\"syncAllowSchemaDowngrade\":true") != std::string::npos);
+    REQUIRE(updated.find("\"syncPeerProbeEnabled\":true") != std::string::npos);
+    REQUIRE(updated.find("\"syncPeerProbeIntervalMs\":7000") != std::string::npos);
+    REQUIRE(updated.find("\"syncPeerProbeTimeoutMs\":650") != std::string::npos);
+    REQUIRE(updated.find("\"syncPeerProbeMaxPerRefresh\":4") != std::string::npos);
+    REQUIRE(updated.find("\"syncPeerProbeFailClosed\":true") != std::string::npos);
+    REQUIRE(updated.find("\"syncPeerProbeFailClosedFailures\":6") != std::string::npos);
 
     const auto connect_address = tightrope::tests::server::send_raw_http(
         port,
@@ -400,6 +426,26 @@ TEST_CASE("uwebsockets runtime serves account admin endpoints", "[server][runtim
     );
     REQUIRE(listed.find("200 OK") != std::string::npos);
     REQUIRE(listed.find(*account_id) != std::string::npos);
+
+    const auto migrated_tokens_dry_run = tightrope::tests::server::send_raw_http(
+        port,
+        "POST /api/accounts/migrate-token-storage?dryRun=true HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    REQUIRE(migrated_tokens_dry_run.find("200 OK") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"scannedAccounts\":") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"plaintextAccounts\":") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"plaintextTokens\":") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"migratedAccounts\":") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"migratedTokens\":") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"failedAccounts\":") != std::string::npos);
+    REQUIRE(migrated_tokens_dry_run.find("\"dryRun\":true") != std::string::npos);
+
+    const auto migrated_tokens_without_key = tightrope::tests::server::send_raw_http(
+        port,
+        "POST /api/accounts/migrate-token-storage HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    REQUIRE(migrated_tokens_without_key.find("400 Bad Request") != std::string::npos);
+    REQUIRE(migrated_tokens_without_key.find("\"code\":\"token_encryption_not_ready\"") != std::string::npos);
 
     const auto refresh_usage = tightrope::tests::server::send_raw_http(
         port,

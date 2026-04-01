@@ -50,6 +50,14 @@ std::string code_from_error_object(const JsonObject& error_object) {
     return normalize_upstream_error_code(code, error_type);
 }
 
+bool contains_deactivated_marker(const std::string_view payload) {
+    if (payload.empty()) {
+        return false;
+    }
+    auto normalized = lower_ascii(std::string(payload));
+    return normalized.find("deactivated") != std::string::npos;
+}
+
 } // namespace
 
 std::string normalize_upstream_error_code(const std::string_view code, const std::string_view error_type) {
@@ -114,6 +122,21 @@ std::string default_error_message_for_code(const std::string_view normalized_err
         return "Proxy request budget exhausted";
     }
     return "Upstream error";
+}
+
+bool upstream_401_body_indicates_deactivated_account(const UpstreamExecutionResult& upstream) {
+    if (upstream.status != 401) {
+        return false;
+    }
+    if (contains_deactivated_marker(upstream.body)) {
+        return true;
+    }
+    for (const auto& event : upstream.events) {
+        if (contains_deactivated_marker(event)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool should_retry_stream_result(const UpstreamExecutionResult& upstream) {

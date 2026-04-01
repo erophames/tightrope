@@ -13,7 +13,7 @@ TEST_CASE("leader proxy handles writes locally on leader", "[sync][raft][proxy]"
     REQUIRE(decision.action == tightrope::sync::consensus::LeaderProxyAction::HandleLocally);
 }
 
-TEST_CASE("leader proxy forwards writes when follower has known leader", "[sync][raft][proxy]") {
+TEST_CASE("leader proxy rejects writes when forwarding path is unavailable", "[sync][raft][proxy]") {
     const auto decision = tightrope::sync::consensus::resolve_leader_proxy({
         .local_node_id = 2,
         .leader_id = 1,
@@ -21,7 +21,7 @@ TEST_CASE("leader proxy forwards writes when follower has known leader", "[sync]
         .has_quorum = true,
     });
 
-    REQUIRE(decision.action == tightrope::sync::consensus::LeaderProxyAction::ForwardToLeader);
+    REQUIRE(decision.action == tightrope::sync::consensus::LeaderProxyAction::RejectForwardingUnavailable);
     REQUIRE(decision.target_leader_id == 1);
 }
 

@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Topology — Popup Mockup v2</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #131514;
+    --surface-1: #191b19;
+    --surface-2: #1e201e;
+    --surface-3: #242624;
+    --recessed: #111311;
+    --border: rgba(255,255,255,0.06);
+    --border-strong: rgba(255,255,255,0.1);
+    --text: #cdd0ca;
+    --text-secondary: #7d817a;
+    --text-tertiary: #575b55;
+    --accent: #7aab9c;
+    --accent-dim: rgba(122,171,156,0.08);
+    --accent-border: rgba(122,171,156,0.2);
+    --ok: #6a9e78;
+    --warn: #b08f4e;
+    --danger: #a25a4f;
+    --radius-sm: 3px;
+    --radius-md: 5px;
+    --radius-lg: 8px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ── Simulated app background ── */
+  .app-bg {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    opacity: 0.6;
+  }
+
+  /* ── Popup Dialog ── */
+  .sync-popup {
+    position: relative;
+    z-index: 10;
+    width: 560px;
+    max-height: 480px;
+    background: var(--surface-1);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03);
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Popup Header ── */
+  .popup-header {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .popup-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .popup-header h2 {
+    font-size: 13px;
+    font-weight: 550;
+    letter-spacing: -0.01em;
+  }
+
+  .popup-header .eyebrow {
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+  }
+
+  .popup-meta {
+    display: flex;
+    gap: 0.7rem;
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+
+  .popup-meta strong {
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+  }
+
+  .popup-meta .accent-val {
+    color: var(--accent);
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+
+  .close-btn:hover { color: var(--text); }
+
+  /* ── Topology Area ── */
+  .topology-area {
+    flex: 1;
+    position: relative;
+    padding: 1.2rem 1rem 1rem;
+    min-height: 340px;
+    overflow: hidden;
+  }
+
+  .topology-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .nodes-layer {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4.5rem;
+    height: 100%;
+  }
+
+  /* ── Node Card (compact) ── */
+  .node-card {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+    min-width: 140px;
+    position: relative;
+  }
+
+  .node-card.leader {
+    border-color: var(--accent-border);
+    background: linear-gradient(180deg, rgba(122,171,156,0.04) 0%, var(--surface-2) 100%);
+  }
+
+  .node-card.leader::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 6px;
+    background: radial-gradient(ellipse 120% 60% at 50% 0%, rgba(122,171,156,0.06), transparent 70%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .node-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+  }
+
+  .node-site-id {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text);
+    letter-spacing: -0.02em;
+  }
+
+  .role-badge {
+    font-size: 9px;
+    font-weight: 550;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0px 5px;
+    border-radius: 3px;
+    line-height: 1.6;
+  }
+
+  .role-badge.leader {
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+  }
+
+  .role-badge.follower {
+    color: var(--text-secondary);
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+  }
+
+  .node-stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.1rem 0.6rem;
+  }
+
+  .node-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 0.25rem;
+    font-size: 10px;
+  }
+
+  .node-stat .label {
+    color: var(--text-tertiary);
+    font-size: 9.5px;
+  }
+
+  .node-stat .value {
+    color: var(--text-secondary);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 450;
+  }
+
+  .node-stat .value.lag { color: var(--warn); }
+  .node-stat .value.synced { color: var(--ok); }
+
+  .follower-row {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* ── SVG Connections ── */
+  .connection-line {
+    fill: none;
+    stroke: rgba(255,255,255,0.05);
+    stroke-width: 1;
+  }
+
+  /* ── Transfer label ── */
+  .transfer-label {
+    position: absolute;
+    z-index: 4;
+    font-size: 9px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    padding: 1px 4px;
+    border-radius: 3px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .transfer-label.down {
+    color: var(--accent);
+    background: rgba(122,171,156,0.08);
+    border: 1px solid var(--accent-border);
+  }
+
+  .transfer-label.up {
+    color: #8a9fd4;
+    background: rgba(138,159,212,0.08);
+    border: 1px solid rgba(138,159,212,0.2);
+  }
+
+  /* ── Footer legend ── */
+  .popup-footer {
+    padding: 0.35rem 0.75rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 0.8rem;
+    font-size: 9.5px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+
+  .legend-swatch {
+    width: 6px;
+    height: 6px;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="app-bg"></div>
+
+<div class="sync-popup">
+
+  <!-- Header -->
+  <div class="popup-header">
+    <div class="popup-header-left">
+      <div>
+        <p class="eyebrow">Cluster</p>
+        <h2>Synchronization</h2>
+      </div>
+    </div>
+    <div class="popup-meta">
+      <span>Leader <strong class="accent-val">site_a3f8</strong></span>
+      <span>Term <strong>14</strong></span>
+      <span>Commit <strong>#2,891</strong></span>
+    </div>
+    <button class="close-btn" type="button">&times;</button>
+  </div>
+
+  <!-- Topology -->
+  <div class="topology-area" id="topology">
+    <svg class="topology-svg" id="svgLayer"><defs></defs></svg>
+
+    <div class="nodes-layer" id="nodesLayer">
+
+      <!-- Leader -->
+      <div class="node-card leader" id="node-leader">
+        <div class="node-header">
+          <span class="node-site-id">site_a3f8</span>
+          <span class="role-badge leader">Leader</span>
+        </div>
+        <div class="node-stats">
+          <div class="node-stat">
+            <span class="label">Commit</span>
+            <span class="value synced">2,891</span>
+          </div>
+          <div class="node-stat">
+            <span class="label">Applied</span>
+            <span class="value">2,891</span>
+          </div>
+          <div class="node-stat">
+            <span class="label">Term</span>
+            <span class="value">14</span>
+          </div>
+          <div class="node-stat">
+            <span class="label">Log</span>
+            <span class="value">2,894</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Followers -->
+      <div class="follower-row" id="followerRow">
+
+        <div class="node-card" id="node-f1">
+          <div class="node-header">
+            <span class="node-site-id">site_b7d2</span>
+            <span class="role-badge follower">Follower</span>
+          </div>
+          <div class="node-stats">
+            <div class="node-stat">
+              <span class="label">Match</span>
+              <span class="value synced">2,891</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Lag</span>
+              <span class="value synced">0</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Heartbeat</span>
+              <span class="value">1s</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Probe</span>
+              <span class="value">4ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="node-card" id="node-f2">
+          <div class="node-header">
+            <span class="node-site-id">site_c9e4</span>
+            <span class="role-badge follower">Follower</span>
+          </div>
+          <div class="node-stats">
+            <div class="node-stat">
+              <span class="label">Match</span>
+              <span class="value lag">2,884</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Lag</span>
+              <span class="value lag">7</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Heartbeat</span>
+              <span class="value">3s</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Probe</span>
+              <span class="value">12ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="node-card" id="node-f3">
+          <div class="node-header">
+            <span class="node-site-id">site_d1a7</span>
+            <span class="role-badge follower">Follower</span>
+          </div>
+          <div class="node-stats">
+            <div class="node-stat">
+              <span class="label">Match</span>
+              <span class="value synced">2,890</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Lag</span>
+              <span class="value synced">1</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Heartbeat</span>
+              <span class="value">1s</span>
+            </div>
+            <div class="node-stat">
+              <span class="label">Probe</span>
+              <span class="value">6ms</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="popup-footer">
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--accent)"></div>
+      <span>Replicating down</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:#8a9fd4"></div>
+      <span>Replicating up</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--warn)"></div>
+      <span>Lagging</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--ok)"></div>
+      <span>Synced</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const svgLayer = document.getElementById('svgLayer');
+  const leader = document.getElementById('node-leader');
+  const followers = ['node-f1', 'node-f2', 'node-f3'].map(id => document.getElementById(id));
+  const container = document.getElementById('topology');
+
+  function getEdge(el, side) {
+    const r = el.getBoundingClientRect();
+    const cr = container.getBoundingClientRect();
+    const cx = r.left - cr.left + r.width / 2;
+    if (side === 'bottom') return { x: cx, y: r.top - cr.top + r.height };
+    if (side === 'top') return { x: cx, y: r.top - cr.top };
+  }
+
+  function makePath(from, to) {
+    const midY = (from.y + to.y) / 2;
+    return `M${from.x},${from.y} C${from.x},${midY} ${to.x},${midY} ${to.x},${to.y}`;
+  }
+
+  function drawConnections() {
+    // Remove old paths (keep defs)
+    svgLayer.querySelectorAll('path').forEach(p => p.remove());
+
+    const lBottom = getEdge(leader, 'bottom');
+    followers.forEach((f, i) => {
+      const fTop = getEdge(f, 'top');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', makePath(lBottom, fTop));
+      path.setAttribute('class', 'connection-line');
+      path.setAttribute('id', `conn-${i}`);
+      svgLayer.appendChild(path);
+    });
+  }
+
+  drawConnections();
+  window.addEventListener('resize', drawConnections);
+
+  // ── Animated directional arrows ──
+
+  function animateChevrons(pathId, direction, count, color) {
+    const path = document.getElementById(pathId);
+    if (!path) return;
+    const len = path.getTotalLength();
+    const stagger = 100;
+
+    for (let c = 0; c < count; c++) {
+      setTimeout(() => {
+        const tri = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        const dur = 1000;
+        const start = performance.now();
+        const forward = direction === 'down';
+
+        function step(now) {
+          const t = Math.min((now - start) / dur, 1);
+          const dist = forward ? t * len : (1 - t) * len;
+          const pt = path.getPointAtLength(dist);
+
+          const d2 = Math.min(dist + 2, len);
+          const d1 = Math.max(dist - 2, 0);
+          const p1 = path.getPointAtLength(d1);
+          const p2 = path.getPointAtLength(d2);
+          const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x) + (forward ? 0 : Math.PI);
+
+          const sz = 3.5;
+          const tip = { x: pt.x + Math.cos(angle) * sz, y: pt.y + Math.sin(angle) * sz };
+          const l = { x: pt.x + Math.cos(angle + 2.4) * sz * 0.85, y: pt.y + Math.sin(angle + 2.4) * sz * 0.85 };
+          const r = { x: pt.x + Math.cos(angle - 2.4) * sz * 0.85, y: pt.y + Math.sin(angle - 2.4) * sz * 0.85 };
+          tri.setAttribute('points', `${tip.x},${tip.y} ${l.x},${l.y} ${r.x},${r.y}`);
+
+          let opacity = 1;
+          if (t < 0.1) opacity = t / 0.1;
+          if (t > 0.85) opacity = (1 - t) / 0.15;
+          tri.setAttribute('fill', color.replace(')', `,${opacity})`).replace('rgb', 'rgba'));
+
+          if (t < 1) requestAnimationFrame(step);
+          else tri.remove();
+        }
+
+        svgLayer.appendChild(tri);
+        requestAnimationFrame(step);
+      }, c * stagger);
+    }
+  }
+
+  function showTransferLabel(pathId, text, direction) {
+    const path = document.getElementById(pathId);
+    if (!path) return;
+    const len = path.getTotalLength();
+    const pt = path.getPointAtLength(len * 0.5);
+
+    const label = document.createElement('div');
+    label.className = 'transfer-label ' + direction;
+    label.textContent = text;
+    label.style.left = (pt.x + 8) + 'px';
+    label.style.top = (pt.y - 7) + 'px';
+    label.style.opacity = '0';
+    label.style.transition = 'opacity 0.25s ease';
+    container.appendChild(label);
+
+    requestAnimationFrame(() => label.style.opacity = '1');
+    setTimeout(() => {
+      label.style.opacity = '0';
+      setTimeout(() => label.remove(), 300);
+    }, 1800);
+  }
+
+  const accentColor = 'rgb(122,171,156)';
+  const upColor = 'rgb(138,159,212)';
+
+  // Simulate bidirectional traffic bursts
+  function burst1() {
+    // Leader → Follower 2 (catching up, lagging)
+    animateChevrons('conn-1', 'down', 4, accentColor);
+    showTransferLabel('conn-1', '7 entries · 2.1 KB', 'down');
+  }
+
+  function burst2() {
+    // Follower 1 → Leader (follower has local CRDT data to push up)
+    animateChevrons('conn-0', 'up', 3, upColor);
+    showTransferLabel('conn-0', '2 entries · 640 B', 'up');
+  }
+
+  function burst3() {
+    // Leader → Follower 3 (small catch-up)
+    animateChevrons('conn-2', 'down', 2, accentColor);
+    showTransferLabel('conn-2', '1 entry · 340 B', 'down');
+  }
+
+  function burst4() {
+    // Follower 3 → Leader (CRDT usage counters)
+    animateChevrons('conn-2', 'up', 2, upColor);
+    showTransferLabel('conn-2', '3 entries · 512 B', 'up');
+  }
+
+  // Staggered loop
+  function runCycle() {
+    burst1();
+    setTimeout(burst2, 1400);
+    setTimeout(burst3, 2800);
+    setTimeout(burst4, 4200);
+  }
+
+  runCycle();
+  setInterval(runCycle, 6000);
+</script>
+
+</body>
+</html>

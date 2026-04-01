@@ -2,6 +2,7 @@
 // Cookie session management
 
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,6 +27,7 @@ public:
 
 private:
     std::int64_t ttl_ms_ = 12 * 60 * 60 * 1000;
+    mutable std::mutex mutex_;
     std::unordered_map<std::string, DashboardSessionState> sessions_;
 };
 

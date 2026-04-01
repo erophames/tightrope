@@ -75,6 +75,22 @@ std::size_t upstream_payload_bytes(const UpstreamExecutionResult& upstream) {
     return bytes;
 }
 
+bool handle_deactivated_401_if_present(const UpstreamExecutionResult& upstream, const std::string_view account_id) {
+    if (account_id.empty() || !internal::upstream_401_body_indicates_deactivated_account(upstream)) {
+        return false;
+    }
+
+    const bool updated = session::mark_upstream_account_unusable(account_id);
+    core::logging::log_event(
+        updated ? core::logging::LogLevel::Info : core::logging::LogLevel::Warning,
+        "runtime",
+        "proxy",
+        "upstream_account_marked_unusable",
+        "account_id=" + std::string(account_id) + " reason=deactivated_401 updated=" + (updated ? "true" : "false")
+    );
+    return true;
+}
+
 } // namespace
 
 ProxyWsResult proxy_responses_websocket(
@@ -103,7 +119,9 @@ ProxyWsResult proxy_responses_websocket(
     std::string access_token;
     std::string traffic_account_id;
     auto resolved_affinity = affinity;
-    if (const auto credentials = session::resolve_upstream_account_credentials(affinity.account_id); credentials.has_value()) {
+    if (const auto credentials =
+            session::resolve_upstream_account_credentials(affinity.account_id, affinity.request_model);
+        credentials.has_value()) {
         resolved_affinity.account_id = credentials->account_id;
         access_token = credentials->access_token;
         if (credentials->internal_account_id > 0) {
@@ -154,29 +172,32 @@ ProxyWsResult proxy_responses_websocket(
 
     auto upstream = execute_upstream(plan);
     if (upstream.status == 401 && !resolved_affinity.account_id.empty()) {
-        if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
-            refreshed.has_value()) {
-            resolved_affinity.account_id = refreshed->account_id;
-            access_token = refreshed->access_token;
-            if (refreshed->internal_account_id > 0) {
-                traffic_account_id = std::to_string(refreshed->internal_account_id);
-            }
-            try {
-                plan = openai::build_responses_websocket_request_plan(
-                    bridged_request_body,
-                    bridged_headers,
-                    access_token,
-                    resolved_affinity.account_id,
-                    ""
-                );
-                upstream = execute_upstream(plan);
-            } catch (const std::exception&) {
-                core::logging::log_event(
-                    core::logging::LogLevel::Warning,
-                    "runtime",
-                    "proxy",
-                    "responses_ws_refresh_rebuild_failed"
-                );
+        if (!handle_deactivated_401_if_present(upstream, resolved_affinity.account_id)) {
+            if (const auto refreshed = session::refresh_upstream_account_credentials(resolved_affinity.account_id);
+                refreshed.has_value()) {
+                resolved_affinity.account_id = refreshed->account_id;
+                access_token = refreshed->access_token;
+                if (refreshed->internal_account_id > 0) {
+                    traffic_account_id = std::to_string(refreshed->internal_account_id);
+                }
+                try {
+                    plan = openai::build_responses_websocket_request_plan(
+                        bridged_request_body,
+                        bridged_headers,
+                        access_token,
+                        resolved_affinity.account_id,
+                        ""
+                    );
+                    upstream = execute_upstream(plan);
+                    (void)handle_deactivated_401_if_present(upstream, resolved_affinity.account_id);
+                } catch (const std::exception&) {
+                    core::logging::log_event(
+                        core::logging::LogLevel::Warning,
+                        "runtime",
+                        "proxy",
+                        "responses_ws_refresh_rebuild_failed"
+                    );
+                }
             }
         }
     }

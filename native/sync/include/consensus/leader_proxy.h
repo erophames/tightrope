@@ -9,7 +9,7 @@ namespace tightrope::sync::consensus {
 
 enum class LeaderProxyAction {
     HandleLocally,
-    ForwardToLeader,
+    RejectForwardingUnavailable,
     RejectNoQuorum,
     RejectLeaderUnknown,
 };

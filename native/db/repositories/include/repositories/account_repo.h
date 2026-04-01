@@ -35,6 +35,15 @@ struct AccountUsageCredentials {
     std::string access_token;
 };
 
+struct TokenStorageMigrationResult {
+    std::int64_t scanned_accounts = 0;
+    std::int64_t plaintext_accounts = 0;
+    std::int64_t plaintext_tokens = 0;
+    std::int64_t migrated_accounts = 0;
+    std::int64_t migrated_tokens = 0;
+    std::int64_t failed_accounts = 0;
+};
+
 [[nodiscard]] bool ensure_accounts_schema(sqlite3* db) noexcept;
 [[nodiscard]] std::vector<AccountRecord> list_accounts(sqlite3* db) noexcept;
 [[nodiscard]] std::optional<AccountRecord> import_account(sqlite3* db, std::string_view email, std::string_view provider)
@@ -44,6 +53,8 @@ struct AccountUsageCredentials {
     noexcept;
 [[nodiscard]] bool delete_account(sqlite3* db, std::int64_t account_id) noexcept;
 [[nodiscard]] std::optional<AccountUsageCredentials> account_usage_credentials(sqlite3* db, std::int64_t account_id) noexcept;
+[[nodiscard]] std::optional<TokenStorageMigrationResult> migrate_plaintext_account_tokens(sqlite3* db, bool dry_run = false)
+    noexcept;
 [[nodiscard]] bool update_account_usage_telemetry(
     sqlite3* db,
     std::int64_t account_id,

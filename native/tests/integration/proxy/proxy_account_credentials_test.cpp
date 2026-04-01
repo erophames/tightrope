@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <sqlite3.h>
@@ -17,6 +18,7 @@
 #include "server/oauth_provider_fake.h"
 #include "server/runtime_test_utils.h"
 #include "tests/integration/proxy/include/test_support/fake_upstream_transport.h"
+#include "token_store.h"
 
 namespace {
 
@@ -25,6 +27,8 @@ struct RefreshProviderGuard {
         tightrope::auth::oauth::clear_token_refresh_provider_for_testing();
     }
 };
+
+constexpr std::string_view kRoutingPlanModelPricingEnv = "TIGHTROPE_ROUTING_PLAN_MODEL_PRICING_USD_PER_MILLION";
 
 std::int64_t seed_account(
     sqlite3* db,
@@ -78,9 +82,119 @@ sqlite3* open_db_readwrite(const std::string& db_path) {
     return db;
 }
 
+std::string query_account_access_token_blob(sqlite3* db, const std::string& account_id) {
+    if (db == nullptr || account_id.empty()) {
+        return {};
+    }
+    sqlite3_stmt* stmt = nullptr;
+    constexpr const char* kSql =
+        "SELECT access_token_encrypted FROM accounts WHERE chatgpt_account_id = ?1 LIMIT 1;";
+    if (sqlite3_prepare_v2(db, kSql, -1, &stmt, nullptr) != SQLITE_OK || stmt == nullptr) {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+        }
+        return {};
+    }
+    const auto finalize = [&stmt]() {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+            stmt = nullptr;
+        }
+    };
+    if (sqlite3_bind_text(stmt, 1, account_id.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+        finalize();
+        return {};
+    }
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        finalize();
+        return {};
+    }
+    std::string value;
+    if (const auto* raw = sqlite3_column_text(stmt, 0); raw != nullptr) {
+        value = reinterpret_cast<const char*>(raw);
+    }
+    finalize();
+    return value;
+}
+
+std::string query_account_status(sqlite3* db, const std::string& account_id) {
+    if (db == nullptr || account_id.empty()) {
+        return {};
+    }
+    sqlite3_stmt* stmt = nullptr;
+    constexpr const char* kSql = "SELECT status FROM accounts WHERE chatgpt_account_id = ?1 LIMIT 1;";
+    if (sqlite3_prepare_v2(db, kSql, -1, &stmt, nullptr) != SQLITE_OK || stmt == nullptr) {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+        }
+        return {};
+    }
+    const auto finalize = [&stmt]() {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+            stmt = nullptr;
+        }
+    };
+    if (sqlite3_bind_text(stmt, 1, account_id.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+        finalize();
+        return {};
+    }
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        finalize();
+        return {};
+    }
+    std::string value;
+    if (const auto* raw = sqlite3_column_text(stmt, 0); raw != nullptr) {
+        value = reinterpret_cast<const char*>(raw);
+    }
+    finalize();
+    return value;
+}
+
+std::size_t count_sticky_sessions_for_account(sqlite3* db, const std::string& account_id) {
+    if (db == nullptr || account_id.empty()) {
+        return 0;
+    }
+    sqlite3_stmt* stmt = nullptr;
+    constexpr const char* kSql = "SELECT COUNT(1) FROM proxy_sticky_sessions WHERE account_id = ?1;";
+    if (sqlite3_prepare_v2(db, kSql, -1, &stmt, nullptr) != SQLITE_OK || stmt == nullptr) {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+        }
+        return 0;
+    }
+    const auto finalize = [&stmt]() {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+            stmt = nullptr;
+        }
+    };
+    if (sqlite3_bind_text(stmt, 1, account_id.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+        finalize();
+        return 0;
+    }
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        finalize();
+        return 0;
+    }
+    const auto count = sqlite3_column_int64(stmt, 0);
+    finalize();
+    if (count <= 0) {
+        return 0;
+    }
+    return static_cast<std::size_t>(count);
+}
+
 void configure_routing_strategy(sqlite3* db, std::string strategy) {
     tightrope::db::DashboardSettingsPatch patch;
     patch.routing_strategy = std::move(strategy);
+    const auto updated = tightrope::db::update_dashboard_settings(db, patch);
+    REQUIRE(updated.has_value());
+}
+
+void configure_routing_plan_model_pricing_overrides(sqlite3* db, std::string overrides) {
+    tightrope::db::DashboardSettingsPatch patch;
+    patch.routing_plan_model_pricing_usd_per_million = std::move(overrides);
     const auto updated = tightrope::db::update_dashboard_settings(db, patch);
     REQUIRE(updated.has_value());
 }
@@ -92,6 +206,26 @@ void set_quota_usage(
     const std::optional<int> quota_secondary_percent
 ) {
     REQUIRE(tightrope::db::update_account_usage_telemetry(db, account_id, quota_primary_percent, quota_secondary_percent));
+}
+
+void set_account_plan_type(sqlite3* db, const std::string& account_id, const std::string& plan_type) {
+    REQUIRE(db != nullptr);
+    sqlite3_stmt* stmt = nullptr;
+    constexpr const char* kSql =
+        "UPDATE accounts SET plan_type = ?1, updated_at = datetime('now') WHERE chatgpt_account_id = ?2;";
+    REQUIRE(sqlite3_prepare_v2(db, kSql, -1, &stmt, nullptr) == SQLITE_OK);
+    REQUIRE(stmt != nullptr);
+    const auto finalize = [&stmt]() {
+        if (stmt != nullptr) {
+            sqlite3_finalize(stmt);
+            stmt = nullptr;
+        }
+    };
+    REQUIRE(sqlite3_bind_text(stmt, 1, plan_type.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK);
+    REQUIRE(sqlite3_bind_text(stmt, 2, account_id.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK);
+    REQUIRE(sqlite3_step(stmt) == SQLITE_DONE);
+    REQUIRE(sqlite3_changes(db) == 1);
+    finalize();
 }
 
 std::string make_oauth_db_with_single_account(
@@ -152,6 +286,123 @@ TEST_CASE("responses JSON uses persisted OAuth account token for upstream author
 }
 
 TEST_CASE(
+    "responses JSON migrates legacy plaintext access token on read when key is configured",
+    "[proxy][auth][credentials][crypto]"
+) {
+    tightrope::tests::server::EnvVarGuard key_hex_guard{"TIGHTROPE_TOKEN_ENCRYPTION_KEY_HEX"};
+    tightrope::tests::server::EnvVarGuard key_file_guard{"TIGHTROPE_TOKEN_ENCRYPTION_KEY_FILE"};
+    tightrope::tests::server::EnvVarGuard key_passphrase_guard{"TIGHTROPE_TOKEN_ENCRYPTION_KEY_FILE_PASSPHRASE"};
+    tightrope::tests::server::EnvVarGuard strict_mode_guard{"TIGHTROPE_TOKEN_ENCRYPTION_REQUIRE_ENCRYPTED_AT_REST"};
+    tightrope::tests::server::EnvVarGuard migrate_guard{"TIGHTROPE_TOKEN_ENCRYPTION_MIGRATE_PLAINTEXT_ON_READ"};
+    REQUIRE(key_file_guard.set(""));
+    REQUIRE(key_passphrase_guard.set(""));
+    REQUIRE(strict_mode_guard.set("0"));
+    REQUIRE(migrate_guard.set("1"));
+    REQUIRE(key_hex_guard.set(""));
+    tightrope::auth::crypto::reset_token_storage_crypto_for_testing();
+
+    const auto db_path = make_oauth_db_with_accounts();
+    {
+        sqlite3* db = open_db_readwrite(db_path);
+        REQUIRE(query_account_access_token_blob(db, "acc-second") == "token-second");
+        sqlite3_close(db);
+    }
+
+    REQUIRE(
+        key_hex_guard.set("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+    );
+    REQUIRE(strict_mode_guard.set("1"));
+    REQUIRE(migrate_guard.set("1"));
+    tightrope::auth::crypto::reset_token_storage_crypto_for_testing();
+
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    REQUIRE(db_path_guard.set(db_path));
+
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [](const tightrope::proxy::openai::UpstreamRequestPlan&) {
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 200,
+                .body = R"({"id":"resp_credentials_migrated","object":"response","status":"completed","output":[]})",
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const auto response = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-5.4","input":"credential-migration-check"})"
+    );
+
+    REQUIRE(response.status == 200);
+    REQUIRE(fake->call_count == 1);
+    REQUIRE(fake->last_plan.headers.at("Authorization") == "Bearer token-second");
+    REQUIRE(fake->last_plan.headers.at("chatgpt-account-id") == "acc-second");
+
+    {
+        sqlite3* db = open_db_readwrite(db_path);
+        const auto stored_after = query_account_access_token_blob(db, "acc-second");
+        REQUIRE_FALSE(stored_after.empty());
+        REQUIRE(stored_after != "token-second");
+        REQUIRE(stored_after.starts_with(tightrope::auth::crypto::token_storage_cipher_prefix()));
+        sqlite3_close(db);
+    }
+
+    std::filesystem::remove(db_path);
+}
+
+TEST_CASE(
+    "responses JSON decrypts encrypted-at-rest OAuth account token for upstream authorization",
+    "[proxy][auth][credentials][crypto]"
+) {
+    tightrope::tests::server::EnvVarGuard key_hex_guard{"TIGHTROPE_TOKEN_ENCRYPTION_KEY_HEX"};
+    tightrope::tests::server::EnvVarGuard key_file_guard{"TIGHTROPE_TOKEN_ENCRYPTION_KEY_FILE"};
+    tightrope::tests::server::EnvVarGuard key_passphrase_guard{"TIGHTROPE_TOKEN_ENCRYPTION_KEY_FILE_PASSPHRASE"};
+    REQUIRE(key_file_guard.set(""));
+    REQUIRE(key_passphrase_guard.set(""));
+    REQUIRE(
+        key_hex_guard.set("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+    );
+    tightrope::auth::crypto::reset_token_storage_crypto_for_testing();
+
+    const auto db_path = make_oauth_db_with_accounts();
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    REQUIRE(db_path_guard.set(db_path));
+
+    {
+        sqlite3* db = open_db_readwrite(db_path);
+        const auto stored_token = query_account_access_token_blob(db, "acc-second");
+        REQUIRE_FALSE(stored_token.empty());
+        REQUIRE(stored_token != "token-second");
+        REQUIRE(stored_token.starts_with(tightrope::auth::crypto::token_storage_cipher_prefix()));
+        sqlite3_close(db);
+    }
+
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [](const tightrope::proxy::openai::UpstreamRequestPlan&) {
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 200,
+                .body = R"({"id":"resp_credentials_encrypted","object":"response","status":"completed","output":[]})",
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const auto response = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-5.4","input":"credential-check-encrypted"})"
+    );
+
+    REQUIRE(response.status == 200);
+    REQUIRE(fake->call_count == 1);
+    REQUIRE(fake->last_plan.headers.find("Authorization") != fake->last_plan.headers.end());
+    REQUIRE(fake->last_plan.headers.at("Authorization") == "Bearer token-second");
+    REQUIRE(fake->last_plan.headers.find("chatgpt-account-id") != fake->last_plan.headers.end());
+    REQUIRE(fake->last_plan.headers.at("chatgpt-account-id") == "acc-second");
+
+    std::filesystem::remove(db_path);
+}
+
+TEST_CASE(
     "responses JSON routes account selection from usage-weighted strategy when no account is pinned",
     "[proxy][auth][credentials][routing]"
 ) {
@@ -188,6 +439,159 @@ TEST_CASE(
     REQUIRE(fake->last_plan.headers.at("Authorization") == "Bearer token-second");
     REQUIRE(fake->last_plan.headers.find("chatgpt-account-id") != fake->last_plan.headers.end());
     REQUIRE(fake->last_plan.headers.at("chatgpt-account-id") == "acc-second");
+
+    std::filesystem::remove(seeded.db_path);
+}
+
+TEST_CASE(
+    "responses JSON cost-aware strategy prefers lower estimated plan cost",
+    "[proxy][auth][credentials][routing][cost]"
+) {
+    const auto seeded = make_oauth_db_with_two_accounts();
+    {
+        sqlite3* db = open_db_readwrite(seeded.db_path);
+        configure_routing_strategy(db, "cost_aware");
+        set_account_plan_type(db, "acc-first", "free");
+        set_account_plan_type(db, "acc-second", "enterprise");
+        sqlite3_close(db);
+    }
+
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    REQUIRE(db_path_guard.set(seeded.db_path));
+
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [](const tightrope::proxy::openai::UpstreamRequestPlan&) {
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 200,
+                .body = R"({"id":"resp_cost_aware","object":"response","status":"completed","output":[]})",
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const auto response = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-5.4","input":"cost-aware-check"})"
+    );
+
+    REQUIRE(response.status == 200);
+    REQUIRE(fake->call_count == 1);
+    REQUIRE(fake->last_plan.headers.at("chatgpt-account-id") == "acc-first");
+    REQUIRE(fake->last_plan.headers.at("Authorization") == "Bearer token-first");
+
+    std::filesystem::remove(seeded.db_path);
+}
+
+TEST_CASE(
+    "responses JSON cost-aware strategy honors dashboard plan-model pricing overrides",
+    "[proxy][auth][credentials][routing][cost]"
+) {
+    tightrope::tests::server::EnvVarGuard pricing_override_guard{kRoutingPlanModelPricingEnv.data()};
+    REQUIRE(pricing_override_guard.set(""));
+
+    const auto seeded = make_oauth_db_with_two_accounts();
+    {
+        sqlite3* db = open_db_readwrite(seeded.db_path);
+        configure_routing_strategy(db, "cost_aware");
+        set_account_plan_type(db, "acc-first", "plus");
+        set_account_plan_type(db, "acc-second", "pro");
+        configure_routing_plan_model_pricing_overrides(
+            db,
+            "plus@gpt-5.4=0.80:0.80,pro@gpt-5.4=0.05:0.05,plus@*=0.80:0.80,pro@*=0.05:0.05"
+        );
+        sqlite3_close(db);
+    }
+
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    REQUIRE(db_path_guard.set(seeded.db_path));
+
+    std::vector<tightrope::proxy::openai::UpstreamRequestPlan> observed_plans;
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [&observed_plans](const tightrope::proxy::openai::UpstreamRequestPlan& plan) {
+            observed_plans.push_back(plan);
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 200,
+                .body = R"({"id":"resp_cost_override","object":"response","status":"completed","output":[]})",
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const auto first = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-5.4","input":"cost-aware-override-primary"})"
+    );
+    const auto second = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-4.1","input":"cost-aware-override-fallback"})"
+    );
+
+    REQUIRE(first.status == 200);
+    REQUIRE(second.status == 200);
+    REQUIRE(observed_plans.size() == 2);
+    REQUIRE(observed_plans[0].headers.at("chatgpt-account-id") == "acc-second");
+    REQUIRE(observed_plans[0].headers.at("Authorization") == "Bearer token-second");
+    REQUIRE(observed_plans[1].headers.at("chatgpt-account-id") == "acc-second");
+    REQUIRE(observed_plans[1].headers.at("Authorization") == "Bearer token-second");
+
+    std::filesystem::remove(seeded.db_path);
+}
+
+TEST_CASE(
+    "responses JSON cost-aware strategy applies env plan-model pricing overrides over dashboard settings",
+    "[proxy][auth][credentials][routing][cost]"
+) {
+    const auto seeded = make_oauth_db_with_two_accounts();
+    {
+        sqlite3* db = open_db_readwrite(seeded.db_path);
+        configure_routing_strategy(db, "cost_aware");
+        set_account_plan_type(db, "acc-first", "plus");
+        set_account_plan_type(db, "acc-second", "pro");
+        configure_routing_plan_model_pricing_overrides(
+            db,
+            "plus@gpt-5.4=0.05:0.05,pro@gpt-5.4=0.80:0.80,plus@*=0.50:0.50,pro@*=0.05:0.05"
+        );
+        sqlite3_close(db);
+    }
+
+    tightrope::tests::server::EnvVarGuard pricing_override_guard{kRoutingPlanModelPricingEnv.data()};
+    REQUIRE(
+        pricing_override_guard.set(
+            "plus@gpt-5.4=0.80:0.80,pro@gpt-5.4=0.05:0.05,plus@*=0.05:0.05,pro@*=0.50:0.50"
+        )
+    );
+
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    REQUIRE(db_path_guard.set(seeded.db_path));
+
+    std::vector<tightrope::proxy::openai::UpstreamRequestPlan> observed_plans;
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [&observed_plans](const tightrope::proxy::openai::UpstreamRequestPlan& plan) {
+            observed_plans.push_back(plan);
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 200,
+                .body = R"({"id":"resp_cost_override_env","object":"response","status":"completed","output":[]})",
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const auto first = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-5.4","input":"cost-aware-override-primary"})"
+    );
+    const auto second = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        R"({"model":"gpt-4.1","input":"cost-aware-override-fallback"})"
+    );
+
+    REQUIRE(first.status == 200);
+    REQUIRE(second.status == 200);
+    REQUIRE(observed_plans.size() == 2);
+    REQUIRE(observed_plans[0].headers.at("chatgpt-account-id") == "acc-second");
+    REQUIRE(observed_plans[0].headers.at("Authorization") == "Bearer token-second");
+    REQUIRE(observed_plans[1].headers.at("chatgpt-account-id") == "acc-first");
+    REQUIRE(observed_plans[1].headers.at("Authorization") == "Bearer token-first");
 
     std::filesystem::remove(seeded.db_path);
 }
@@ -418,4 +822,67 @@ TEST_CASE("responses JSON retries once with refreshed OAuth token after upstream
     REQUIRE(refresh_provider->refresh_exchange_calls() == 1);
 
     std::filesystem::remove(db_path);
+}
+
+TEST_CASE(
+    "responses JSON marks deactivated 401 accounts unusable and purges sticky affinity",
+    "[proxy][auth][credentials][deactivated]"
+) {
+    const auto seeded = make_oauth_db_with_two_accounts();
+    {
+        sqlite3* db = open_db_readwrite(seeded.db_path);
+        configure_routing_strategy(db, "usage_weighted");
+        set_quota_usage(db, seeded.first_internal_id, 95, 95);
+        set_quota_usage(db, seeded.second_internal_id, 5, 5);
+        sqlite3_close(db);
+    }
+
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    REQUIRE(db_path_guard.set(seeded.db_path));
+
+    std::size_t call_count = 0;
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [&call_count](const tightrope::proxy::openai::UpstreamRequestPlan& plan) {
+            ++call_count;
+            if (call_count == 1) {
+                REQUIRE(plan.headers.at("chatgpt-account-id") == "acc-first");
+                REQUIRE(plan.headers.at("Authorization") == "Bearer token-first");
+                return tightrope::proxy::UpstreamExecutionResult{
+                    .status = 401,
+                    .body = R"({"error":{"code":"invalid_api_key","message":"Your account has been deactivated","type":"authentication_error"}})",
+                };
+            }
+
+            REQUIRE(plan.headers.at("chatgpt-account-id") == "acc-second");
+            REQUIRE(plan.headers.at("Authorization") == "Bearer token-second");
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 200,
+                .body = R"({"id":"resp_recovered_after_deactivate","object":"response","status":"completed","output":[]})",
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const std::string payload =
+        R"({"model":"gpt-5.4","input":"deactivated-account-check","prompt_cache_key":"deactivated-sticky-key"})";
+    const auto first = tightrope::server::controllers::post_proxy_responses_json(
+        "/v1/responses",
+        payload,
+        {{"chatgpt-account-id", "acc-first"}}
+    );
+    REQUIRE(first.status == 401);
+    REQUIRE(call_count == 1);
+
+    {
+        sqlite3* db = open_db_readwrite(seeded.db_path);
+        REQUIRE(query_account_status(db, "acc-first") == "deactivated");
+        REQUIRE(count_sticky_sessions_for_account(db, "acc-first") == 0);
+        sqlite3_close(db);
+    }
+
+    const auto second = tightrope::server::controllers::post_proxy_responses_json("/v1/responses", payload);
+    REQUIRE(second.status == 200);
+    REQUIRE(call_count == 2);
+
+    std::filesystem::remove(seeded.db_path);
 }
