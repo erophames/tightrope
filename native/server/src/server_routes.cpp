@@ -1066,8 +1066,11 @@ void wire_ws_route(uWS::App& app, const std::string& path) {
                             if (connection_handle == nullptr) {
                                 return;
                             }
-                            std::lock_guard<std::mutex> handle_lock(connection_handle->mutex);
-                            auto* active_ws = connection_handle->ws;
+                            ResponsesWs* active_ws = nullptr;
+                            {
+                                std::lock_guard<std::mutex> handle_lock(connection_handle->mutex);
+                                active_ws = connection_handle->ws;
+                            }
                             if (active_ws == nullptr) {
                                 return;
                             }

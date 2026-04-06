@@ -952,19 +952,9 @@ TEST_CASE(
         ws_headers
     );
     REQUIRE(first.status == 101);
-    REQUIRE_FALSE(first.accepted);
-    REQUIRE(first.close_code == 1011);
-    REQUIRE(first.frames.empty());
-
-    const auto second = tightrope::server::controllers::proxy_responses_websocket(
-        "/backend-api/codex/responses",
-        R"({"model":"gpt-5.4","input":"turn-recover"})",
-        ws_headers
-    );
-    REQUIRE(second.status == 101);
-    REQUIRE(second.accepted);
-    REQUIRE(second.frames.size() == 2);
-    REQUIRE(second.frames.back().find("\"resp_ws_timeout_recovered\"") != std::string::npos);
+    REQUIRE(first.accepted);
+    REQUIRE(first.frames.size() == 2);
+    REQUIRE(first.frames.back().find("\"resp_ws_timeout_recovered\"") != std::string::npos);
 
     REQUIRE(server.request_count() == 2);
     REQUIRE(server.connection_count() >= 2);

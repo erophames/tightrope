@@ -1002,6 +1002,8 @@ UpstreamExecutionResult execute_over_websocket_with_persistent_bridge(
     const auto traffic_account_id = std::string(current_account_traffic_context_account_id());
     const auto previous_response_id = parse_previous_response_id_from_payload(plan.body);
     const bool has_previous_response = previous_response_id.has_value();
+    const bool response_create_request = is_response_create_payload(plan.body);
+    const bool can_retry_on_fresh_bridge = response_create_request && !has_previous_response;
     core::logging::log_event(
         core::logging::LogLevel::Debug,
         "runtime",
@@ -1053,7 +1055,7 @@ UpstreamExecutionResult execute_over_websocket_with_persistent_bridge(
             if (!should_create) {
                 continue;
             }
-            if (!is_response_create_payload(plan.body)) {
+            if (!response_create_request) {
                 return {};
             }
 
@@ -1107,131 +1109,184 @@ UpstreamExecutionResult execute_over_websocket_with_persistent_bridge(
         if (session_connect_failure.has_value()) {
             return *session_connect_failure;
         }
-        if (!is_response_create_payload(plan.body)) {
+        if (!response_create_request) {
             return no_active_upstream_websocket_session_result();
         }
         return websocket_result_with_init_failure("Failed to acquire websocket bridge session");
     }
 
-    UpstreamExecutionResult result;
-    bool remove_session = false;
     const long effective_request_timeout_ms = request_timeout_ms > 0 ? request_timeout_ms : kDefaultRequestTimeoutMs;
-    {
-        std::unique_lock<std::mutex> session_lock(session->mutex);
-        if (session_lock.owns_lock()) {
-            if (!traffic_account_id.empty() && session->traffic_account_id != traffic_account_id) {
-                session->traffic_account_id = traffic_account_id;
-            }
-            const auto effective_traffic_account_id =
-                !traffic_account_id.empty() ? traffic_account_id : session->traffic_account_id;
-            if (!effective_traffic_account_id.empty()) {
-                record_account_upstream_egress(effective_traffic_account_id, plan.body.size());
-            }
-            auto write_ec = write_bridge_connection(session->connection, plan.body, plan.websocket_binary_payload);
-            if (write_ec) {
-                close_bridge_connection(session->connection);
-                remove_session = true;
-                result = websocket_result_with_error(write_ec);
-            } else {
-                result.status = 101;
-                result.close_code = 1000;
-                result.accepted = true;
-                result.headers = session->connection.handshake_headers;
+    auto run_session = [&](const std::shared_ptr<PersistentBridgeSession>& active_session)
+        -> std::pair<UpstreamExecutionResult, bool> {
+        UpstreamExecutionResult result;
+        bool remove_session = false;
+        bool transport_error = false;
+        bool cancelled_by_downstream_close = false;
+        {
+            std::unique_lock<std::mutex> session_lock(active_session->mutex);
+            if (session_lock.owns_lock()) {
+                if (!traffic_account_id.empty() && active_session->traffic_account_id != traffic_account_id) {
+                    active_session->traffic_account_id = traffic_account_id;
+                }
+                const auto effective_traffic_account_id =
+                    !traffic_account_id.empty() ? traffic_account_id : active_session->traffic_account_id;
+                if (!effective_traffic_account_id.empty()) {
+                    record_account_upstream_egress(effective_traffic_account_id, plan.body.size());
+                }
+                auto write_ec = write_bridge_connection(active_session->connection, plan.body, plan.websocket_binary_payload);
+                if (write_ec) {
+                    close_bridge_connection(active_session->connection);
+                    remove_session = true;
+                    transport_error = true;
+                    result = websocket_result_with_error(write_ec);
+                } else {
+                    result.status = 101;
+                    result.close_code = 1000;
+                    result.accepted = true;
+                    result.headers = active_session->connection.handshake_headers;
 
-                bool saw_terminal_event = false;
-                std::size_t total_upstream_bytes = 0;
-                auto last_activity_ms = monotonic_now_ms();
-                for (;;) {
-                    if (session->cancel_requested.load(std::memory_order_relaxed)) {
-                        close_bridge_connection(session->connection);
-                        remove_session = true;
-                        result.error_code = "stream_incomplete";
-                        break;
-                    }
-                    std::string payload;
-                    auto read_ec = read_bridge_connection(session->connection, payload);
-                    if (is_websocket_timeout(read_ec)) {
-                        const auto now_ms = monotonic_now_ms();
-                        if (effective_request_timeout_ms > 0 &&
-                            (now_ms - last_activity_ms) >= effective_request_timeout_ms) {
-                            close_bridge_connection(session->connection);
+                    bool saw_terminal_event = false;
+                    std::size_t total_upstream_bytes = 0;
+                    auto last_activity_ms = monotonic_now_ms();
+                    for (;;) {
+                        if (active_session->cancel_requested.load(std::memory_order_relaxed)) {
+                            close_bridge_connection(active_session->connection);
                             remove_session = true;
-                            core::logging::log_event(
-                                core::logging::LogLevel::Warning,
-                                "runtime",
-                                "proxy",
-                                "responses_ws_bridge_session_idle_timeout",
-                                "key_fp=" + bridge_key_fingerprint(bridge_key) + " idle_ms=" +
-                                    std::to_string(now_ms - last_activity_ms)
-                            );
-                            result = websocket_result_with_error(asio::error::timed_out);
+                            cancelled_by_downstream_close = true;
+                            result.error_code = "stream_incomplete";
                             break;
                         }
-                        continue;
+                        std::string payload;
+                        auto read_ec = read_bridge_connection(active_session->connection, payload);
+                        if (is_websocket_timeout(read_ec)) {
+                            const auto now_ms = monotonic_now_ms();
+                            if (effective_request_timeout_ms > 0 &&
+                                (now_ms - last_activity_ms) >= effective_request_timeout_ms) {
+                                close_bridge_connection(active_session->connection);
+                                remove_session = true;
+                                transport_error = true;
+                                core::logging::log_event(
+                                    core::logging::LogLevel::Warning,
+                                    "runtime",
+                                    "proxy",
+                                    "responses_ws_bridge_session_idle_timeout",
+                                    "key_fp=" + bridge_key_fingerprint(bridge_key) + " idle_ms=" +
+                                        std::to_string(now_ms - last_activity_ms)
+                                );
+                                result = websocket_result_with_error(asio::error::timed_out);
+                                break;
+                            }
+                            continue;
+                        }
+                        if (read_ec == websocket::error::closed) {
+                            close_bridge_connection(active_session->connection);
+                            remove_session = true;
+                            transport_error = true;
+                            result.error_code = "stream_incomplete";
+                            break;
+                        }
+                        if (read_ec) {
+                            close_bridge_connection(active_session->connection);
+                            remove_session = true;
+                            transport_error = true;
+                            result = websocket_result_with_error(read_ec);
+                            break;
+                        }
+
+                        if (payload.empty()) {
+                            continue;
+                        }
+                        last_activity_ms = monotonic_now_ms();
+                        total_upstream_bytes += payload.size();
+                        if (total_upstream_bytes > kMaxUpstreamResponseBytes) {
+                            close_bridge_connection(active_session->connection);
+                            remove_session = true;
+                            result.status = 502;
+                            result.close_code = 1011;
+                            result.accepted = false;
+                            result.error_code = "upstream_response_too_large";
+                            break;
+                        }
+                        if (!effective_traffic_account_id.empty()) {
+                            record_account_upstream_ingress(effective_traffic_account_id, payload.size());
+                        }
+                        result.events.push_back(payload);
+                        if (websocket_stream_event_terminal(payload)) {
+                            saw_terminal_event = true;
+                            break;
+                        }
                     }
-                    if (read_ec == websocket::error::closed) {
-                        close_bridge_connection(session->connection);
-                        remove_session = true;
+
+                    if (!saw_terminal_event && result.error_code.empty()) {
                         result.error_code = "stream_incomplete";
-                        break;
-                    }
-                    if (read_ec) {
-                        close_bridge_connection(session->connection);
-                        remove_session = true;
-                        result = websocket_result_with_error(read_ec);
-                        break;
                     }
 
-                    if (payload.empty()) {
-                        continue;
-                    }
-                    last_activity_ms = monotonic_now_ms();
-                    total_upstream_bytes += payload.size();
-                    if (total_upstream_bytes > kMaxUpstreamResponseBytes) {
-                        close_bridge_connection(session->connection);
-                        remove_session = true;
-                        result.status = 502;
-                        result.close_code = 1011;
-                        result.accepted = false;
-                        result.error_code = "upstream_response_too_large";
-                        break;
-                    }
-                    if (!effective_traffic_account_id.empty()) {
-                        record_account_upstream_ingress(effective_traffic_account_id, payload.size());
-                    }
-                    result.events.push_back(payload);
-                    if (websocket_stream_event_terminal(payload)) {
-                        saw_terminal_event = true;
-                        break;
-                    }
-                }
-
-                if (!saw_terminal_event && result.error_code.empty()) {
-                    result.error_code = "stream_incomplete";
-                }
-
-                if (!remove_session) {
-                    const auto resolved_error = internal::resolved_upstream_error_code(result);
-                    if (resolved_error == "previous_response_not_found" || resolved_error == "stream_incomplete") {
-                        close_bridge_connection(session->connection);
-                        remove_session = true;
-                    } else {
-                        session->updated_at_ms.store(monotonic_now_ms(), std::memory_order_relaxed);
+                    if (!remove_session) {
+                        const auto resolved_error = internal::resolved_upstream_error_code(result);
+                        if (resolved_error == "previous_response_not_found" || resolved_error == "stream_incomplete") {
+                            close_bridge_connection(active_session->connection);
+                            remove_session = true;
+                        } else {
+                            active_session->updated_at_ms.store(monotonic_now_ms(), std::memory_order_relaxed);
+                        }
                     }
                 }
             }
         }
+
+        if (remove_session) {
+            std::lock_guard<std::mutex> lock(bridge.mutex);
+            const auto it = bridge.sessions.find(bridge_key);
+            if (it != bridge.sessions.end() && it->second == active_session) {
+                bridge.sessions.erase(it);
+            }
+        }
+
+        bool retryable = false;
+        if (can_retry_on_fresh_bridge && !cancelled_by_downstream_close) {
+            const auto resolved_error = internal::resolved_upstream_error_code(result);
+            retryable = transport_error || resolved_error == "stream_incomplete" || resolved_error == "upstream_request_timeout";
+        }
+        return {std::move(result), retryable};
+    };
+
+    auto [first_result, should_retry] = run_session(session);
+    if (!should_retry) {
+        return first_result;
     }
 
-    if (remove_session) {
+    core::logging::log_event(
+        core::logging::LogLevel::Info,
+        "runtime",
+        "proxy",
+        "responses_ws_bridge_session_retry_fresh",
+        "key_fp=" + bridge_key_fingerprint(bridge_key)
+    );
+
+    {
         std::lock_guard<std::mutex> lock(bridge.mutex);
         const auto it = bridge.sessions.find(bridge_key);
         if (it != bridge.sessions.end() && it->second == session) {
             bridge.sessions.erase(it);
         }
     }
+    {
+        std::lock_guard<std::mutex> session_lock(session->mutex);
+        close_bridge_connection(session->connection);
+    }
 
-    return result;
+    session_connect_failure.reset();
+    const auto retry_session = acquire_or_create_session();
+    if (!retry_session) {
+        if (session_connect_failure.has_value()) {
+            return *session_connect_failure;
+        }
+        return first_result;
+    }
+
+    auto [retry_result, unused_retry_flag] = run_session(retry_session);
+    (void)unused_retry_flag;
+    return retry_result;
 }
 
 template <typename WebSocketStream>
