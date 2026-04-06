@@ -430,6 +430,20 @@ TEST_CASE("responses JSON path reuses sticky account by prompt cache key", "[pro
     REQUIRE(fake->last_plan.headers.find("chatgpt-account-id") != fake->last_plan.headers.end());
     REQUIRE(fake->last_plan.headers.at("chatgpt-account-id") == "acc-sticky-001");
 
+    sqlite3* db = nullptr;
+    REQUIRE(
+        sqlite3_open_v2(sticky_db_file.string().c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) ==
+        SQLITE_OK
+    );
+    REQUIRE(db != nullptr);
+    const auto persisted = tightrope::db::list_proxy_sticky_sessions(db, 10, 0);
+    const auto it = std::find_if(persisted.begin(), persisted.end(), [](const auto& row) {
+        return row.session_key == "transport-sticky-acc-001";
+    });
+    REQUIRE(it != persisted.end());
+    REQUIRE(it->kind == "prompt_cache");
+    sqlite3_close(db);
+
     tightrope::proxy::reset_upstream_transport();
     std::filesystem::remove(sticky_db_file);
 }
@@ -478,6 +492,79 @@ TEST_CASE(
     REQUIRE_FALSE(persisted.empty());
     REQUIRE(persisted.front().account_id == "acc-turn-state-sticky");
     REQUIRE(persisted.front().session_key.starts_with("http_turn_"));
+    REQUIRE(persisted.front().kind == "codex_session");
+    sqlite3_close(db);
+
+    std::filesystem::remove(sticky_db_file);
+}
+
+TEST_CASE(
+    "backend websocket path persists sticky session via session_id key",
+    "[proxy][transport][ws][sticky]"
+) {
+    const auto sticky_db_file =
+        std::filesystem::temp_directory_path() / std::filesystem::path("tightrope-proxy-sticky-backend-ws.sqlite3");
+    std::filesystem::remove(sticky_db_file);
+    EnvVarGuard db_path_guard("TIGHTROPE_DB_PATH");
+    REQUIRE(setenv("TIGHTROPE_DB_PATH", sticky_db_file.string().c_str(), 1) == 0);
+    {
+        sqlite3* db = nullptr;
+        REQUIRE(
+            sqlite3_open_v2(
+                sticky_db_file.string().c_str(),
+                &db,
+                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                nullptr
+            ) == SQLITE_OK
+        );
+        REQUIRE(db != nullptr);
+        REQUIRE(tightrope::db::run_migrations(db));
+        enable_sticky_threads(db);
+        sqlite3_close(db);
+    }
+
+    auto fake = std::make_shared<tightrope::tests::proxy::FakeUpstreamTransport>(
+        [](const tightrope::proxy::openai::UpstreamRequestPlan&) {
+            return tightrope::proxy::UpstreamExecutionResult{
+                .status = 101,
+                .events = {
+                    R"({"type":"response.created","response":{"id":"resp_ws_sticky_created","status":"in_progress"}})",
+                    R"({"type":"response.completed","response":{"id":"resp_ws_sticky_created","object":"response","status":"completed","output":[]}})",
+                },
+                .accepted = true,
+                .close_code = 1000,
+            };
+        }
+    );
+    const tightrope::tests::proxy::ScopedUpstreamTransport scoped_transport(fake);
+
+    const std::string payload = R"({"model":"gpt-5.4","input":"backend ws sticky create"})";
+    const tightrope::proxy::openai::HeaderMap inbound = {
+        {"chatgpt-account-id", "acc-backend-ws-sticky"},
+        {"session_id", "ws-sticky-session-key"},
+    };
+
+    const auto response = tightrope::server::controllers::proxy_responses_websocket(
+        "/backend-api/codex/responses",
+        payload,
+        inbound
+    );
+    REQUIRE(response.status == 101);
+    REQUIRE(response.accepted);
+
+    sqlite3* db = nullptr;
+    REQUIRE(
+        sqlite3_open_v2(sticky_db_file.string().c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) ==
+        SQLITE_OK
+    );
+    REQUIRE(db != nullptr);
+    const auto persisted = tightrope::db::list_proxy_sticky_sessions(db, 20, 0);
+    const auto it = std::find_if(persisted.begin(), persisted.end(), [](const auto& row) {
+        return row.session_key == "ws-sticky-session-key";
+    });
+    REQUIRE(it != persisted.end());
+    REQUIRE(it->account_id == "acc-backend-ws-sticky");
+    REQUIRE(it->kind == "codex_session");
     sqlite3_close(db);
 
     std::filesystem::remove(sticky_db_file);

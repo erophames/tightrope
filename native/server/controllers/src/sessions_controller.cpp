@@ -32,6 +32,7 @@ StickySessionPayload to_payload(const db::ProxyStickySessionRecord& record) {
     return {
         .session_key = record.session_key,
         .account_id = record.account_id,
+        .kind = record.kind,
         .updated_at_ms = record.updated_at_ms,
         .expires_at_ms = record.expires_at_ms,
     };

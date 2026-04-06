@@ -11,6 +11,7 @@ namespace tightrope::proxy::session {
 
 struct StickyAffinityResolution {
     std::string sticky_key;
+    std::string sticky_kind = "sticky_thread";
     std::string account_id;
     std::string request_model;
     bool from_header = false;

@@ -33,7 +33,8 @@ std::optional<std::size_t> parse_size_query(const std::string_view value) {
 
 std::string sticky_session_json(const controllers::StickySessionPayload& session) {
     return std::string(R"({"sessionKey":)") + core::text::quote_json_string(session.session_key) + R"(,"accountId":)" +
-           core::text::quote_json_string(session.account_id) + R"(,"updatedAtMs":)" +
+           core::text::quote_json_string(session.account_id) + R"(,"kind":)" +
+           core::text::quote_json_string(session.kind) + R"(,"updatedAtMs":)" +
            std::to_string(session.updated_at_ms) + R"(,"expiresAtMs":)" + std::to_string(session.expires_at_ms) + "}";
 }
 

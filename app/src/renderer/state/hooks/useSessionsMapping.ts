@@ -18,6 +18,13 @@ function inferSessionKind(sessionKey: string): SessionKind {
   return 'sticky_thread';
 }
 
+function coerceSessionKind(value: unknown): SessionKind | null {
+  if (value === 'codex_session' || value === 'sticky_thread' || value === 'prompt_cache') {
+    return value;
+  }
+  return null;
+}
+
 export function clampSessionsOffset(offset: number, totalCount: number, pageSize: number): number {
   if (totalCount <= 0) {
     return 0;
@@ -29,12 +36,13 @@ export function clampSessionsOffset(offset: number, totalCount: number, pageSize
 export function mapRuntimeStickySessionToUiSession(record: RuntimeStickySession, generatedAtMs: number): StickySession {
   const sessionKey = typeof record.sessionKey === 'string' ? record.sessionKey : '';
   const accountId = typeof record.accountId === 'string' ? record.accountId : '';
+  const kind = coerceSessionKind(record.kind) ?? inferSessionKind(sessionKey);
   const updatedAtMs = Number.isFinite(record.updatedAtMs) ? Math.trunc(record.updatedAtMs) : 0;
   const expiresAtMs = Number.isFinite(record.expiresAtMs) ? Math.trunc(record.expiresAtMs) : 0;
   const hasExpiry = expiresAtMs > 0;
   return {
     key: sessionKey,
-    kind: inferSessionKind(sessionKey),
+    kind,
     accountId,
     updated: formatSessionTimestamp(updatedAtMs),
     expiry: hasExpiry ? formatSessionTimestamp(expiresAtMs) : null,

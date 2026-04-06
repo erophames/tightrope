@@ -359,6 +359,7 @@ export interface RuntimeAccountsListResponse {
 export interface RuntimeStickySession {
   sessionKey: string;
   accountId: string;
+  kind?: SessionKind | null;
   updatedAtMs: number;
   expiresAtMs: number;
 }

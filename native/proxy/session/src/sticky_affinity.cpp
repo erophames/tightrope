@@ -44,6 +44,9 @@ using JsonObject = Json::object_t;
 constexpr std::int64_t kDefaultStickyTtlMs = 30 * 60 * 1000;
 constexpr std::int64_t kDefaultCleanupIntervalMs = 60 * 1000;
 constexpr std::string_view kAccountHeader = "chatgpt-account-id";
+constexpr std::string_view kStickyKindStickyThread = "sticky_thread";
+constexpr std::string_view kStickyKindCodexSession = "codex_session";
+constexpr std::string_view kStickyKindPromptCache = "prompt_cache";
 
 constexpr std::array<std::string_view, 6> kStickyKeyFields = {
     "prompt_cache_key",
@@ -67,7 +70,13 @@ constexpr std::string_view kPlanModelPricingEnv = "TIGHTROPE_ROUTING_PLAN_MODEL_
 
 struct RequestAffinityFields {
     std::string sticky_key;
+    std::string sticky_kind = std::string(kStickyKindStickyThread);
     std::string model;
+};
+
+struct StickyKeyExtraction {
+    std::string key;
+    std::string kind = std::string(kStickyKindStickyThread);
 };
 
 struct PlanModelPricingOverrideState {
@@ -509,11 +518,41 @@ std::string read_string_field(const JsonObject& object, std::string_view key) {
     return value;
 }
 
-std::string sticky_key_from_object(const JsonObject& object) {
+std::string normalize_sticky_kind(std::string_view kind) {
+    auto normalized = core::text::to_lower_ascii(core::text::trim_ascii(kind));
+    if (normalized == kStickyKindPromptCache || normalized == kStickyKindCodexSession ||
+        normalized == kStickyKindStickyThread) {
+        return normalized;
+    }
+    return std::string(kStickyKindStickyThread);
+}
+
+std::string_view sticky_kind_for_json_key(std::string_view key) {
+    if (key == "prompt_cache_key" || key == "promptCacheKey") {
+        return kStickyKindPromptCache;
+    }
+    if (key == "session_id" || key == "sessionId" || key == "thread_id" || key == "threadId") {
+        return kStickyKindCodexSession;
+    }
+    return kStickyKindStickyThread;
+}
+
+std::string_view sticky_kind_for_header_key(std::string_view key) {
+    if (key == "x-codex-session-id" || key == "x-codex-turn-state" || key == "session_id" || key == "session-id" ||
+        key == "x-session-id" || key == "thread_id" || key == "x-thread-id") {
+        return kStickyKindCodexSession;
+    }
+    return kStickyKindStickyThread;
+}
+
+StickyKeyExtraction sticky_key_from_object(const JsonObject& object) {
     for (const auto key : kStickyKeyFields) {
         auto value = read_string_field(object, key);
         if (!value.empty()) {
-            return value;
+            return StickyKeyExtraction{
+                .key = std::move(value),
+                .kind = std::string(sticky_kind_for_json_key(key)),
+            };
         }
     }
 
@@ -523,12 +562,15 @@ std::string sticky_key_from_object(const JsonObject& object) {
         for (const auto key : kStickyKeyFields) {
             auto value = read_string_field(metadata, key);
             if (!value.empty()) {
-                return value;
+                return StickyKeyExtraction{
+                    .key = std::move(value),
+                    .kind = std::string(sticky_kind_for_json_key(key)),
+                };
             }
         }
     }
 
-    return {};
+    return StickyKeyExtraction{};
 }
 
 std::string model_from_object(const JsonObject& object) {
@@ -551,7 +593,9 @@ RequestAffinityFields extract_request_affinity_fields(const std::string& raw_req
         return fields;
     }
     const auto& object = payload.get_object();
-    fields.sticky_key = sticky_key_from_object(object);
+    const auto sticky = sticky_key_from_object(object);
+    fields.sticky_key = sticky.key;
+    fields.sticky_kind = normalize_sticky_kind(sticky.kind);
     fields.model = model_from_object(object);
     return fields;
 }
@@ -565,7 +609,7 @@ std::string account_from_headers(const openai::HeaderMap& inbound_headers) {
     return {};
 }
 
-std::string sticky_key_from_headers(const openai::HeaderMap& inbound_headers) {
+StickyKeyExtraction sticky_key_from_headers(const openai::HeaderMap& inbound_headers) {
     for (const auto key : kStickyKeyHeaderFields) {
         for (const auto& [name, value] : inbound_headers) {
             if (!core::text::equals_case_insensitive(name, key)) {
@@ -573,11 +617,14 @@ std::string sticky_key_from_headers(const openai::HeaderMap& inbound_headers) {
             }
             auto candidate = std::string(core::text::trim_ascii(value));
             if (!candidate.empty()) {
-                return candidate;
+                return StickyKeyExtraction{
+                    .key = std::move(candidate),
+                    .kind = std::string(sticky_kind_for_header_key(key)),
+                };
             }
         }
     }
-    return {};
+    return StickyKeyExtraction{};
 }
 
 std::optional<std::string> normalize_stored_access_token(
@@ -1339,8 +1386,11 @@ resolve_sticky_affinity(const std::string& raw_request_body, const openai::Heade
     StickyAffinityResolution resolution;
     const auto request_fields = extract_request_affinity_fields(raw_request_body);
     resolution.sticky_key = request_fields.sticky_key;
+    resolution.sticky_kind = normalize_sticky_kind(request_fields.sticky_kind);
     if (resolution.sticky_key.empty()) {
-        resolution.sticky_key = sticky_key_from_headers(inbound_headers);
+        const auto sticky_from_headers = sticky_key_from_headers(inbound_headers);
+        resolution.sticky_key = sticky_from_headers.key;
+        resolution.sticky_kind = normalize_sticky_kind(sticky_from_headers.kind);
     }
     resolution.request_model = request_fields.model;
     resolution.account_id = account_from_headers(inbound_headers);
@@ -1385,7 +1435,14 @@ void persist_sticky_affinity(const StickyAffinityResolution& resolution) {
     }
 
     const auto now = now_ms();
-    (void)db::upsert_proxy_sticky_session(db, resolution.sticky_key, resolution.account_id, now, state.sticky_ttl_ms);
+    (void)db::upsert_proxy_sticky_session(
+        db,
+        resolution.sticky_key,
+        resolution.account_id,
+        now,
+        state.sticky_ttl_ms,
+        resolution.sticky_kind
+    );
     maybe_purge_expired(state, db, now);
 }
 

@@ -15,6 +15,7 @@ namespace tightrope::db {
 struct ProxyStickySessionRecord {
     std::string session_key;
     std::string account_id;
+    std::string kind = "sticky_thread";
     std::int64_t updated_at_ms = 0;
     std::int64_t expires_at_ms = 0;
 };
@@ -34,7 +35,8 @@ struct ProxyResponseContinuityRecord {
     std::string_view session_key,
     std::string_view account_id,
     std::int64_t now_ms,
-    std::int64_t ttl_ms
+    std::int64_t ttl_ms,
+    std::string_view kind = "sticky_thread"
 ) noexcept;
 [[nodiscard]] std::optional<std::string>
 find_proxy_sticky_session_account(sqlite3* db, std::string_view session_key, std::int64_t now_ms) noexcept;

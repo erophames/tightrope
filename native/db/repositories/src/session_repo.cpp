@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "sqlite_repo_utils.h"
+#include "text/ascii.h"
 
 namespace tightrope::db {
 
@@ -21,12 +22,15 @@ constexpr std::string_view kEnsureProxyStickySchemaSql = R"SQL(
 CREATE TABLE IF NOT EXISTS proxy_sticky_sessions (
     session_key TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'sticky_thread',
     updated_at_ms INTEGER NOT NULL,
     expires_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_proxy_sticky_sessions_expires_at
     ON proxy_sticky_sessions(expires_at_ms);
 )SQL";
+constexpr const char* kEnsureProxyStickySessionKindColumnSql =
+    "ALTER TABLE proxy_sticky_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'sticky_thread';";
 
 constexpr std::string_view kEnsureProxyResponseContinuitySchemaSql = R"SQL(
 CREATE TABLE IF NOT EXISTS proxy_response_continuity (
@@ -45,7 +49,21 @@ CREATE INDEX IF NOT EXISTS idx_proxy_response_continuity_expires_at
 )SQL";
 
 bool ensure_schema(SQLite::Database& db) noexcept {
-    return sqlite_repo_utils::exec_sql(db, kEnsureProxyStickySchemaSql.data());
+    return sqlite_repo_utils::exec_sql(db, kEnsureProxyStickySchemaSql.data()) &&
+           sqlite_repo_utils::ensure_column(
+               db,
+               "proxy_sticky_sessions",
+               "kind",
+               kEnsureProxyStickySessionKindColumnSql
+           );
+}
+
+std::string normalize_sticky_session_kind(std::string_view kind) {
+    auto normalized = core::text::to_lower_ascii(core::text::trim_ascii(kind));
+    if (normalized == "prompt_cache" || normalized == "codex_session" || normalized == "sticky_thread") {
+        return normalized;
+    }
+    return "sticky_thread";
 }
 
 bool ensure_response_continuity_schema(SQLite::Database& db) noexcept {
@@ -67,7 +85,8 @@ bool upsert_proxy_sticky_session(
     std::string_view session_key,
     std::string_view account_id,
     const std::int64_t now_ms,
-    const std::int64_t ttl_ms
+    const std::int64_t ttl_ms,
+    const std::string_view kind
 ) noexcept {
     auto handle = sqlite_repo_utils::resolve_database(db);
     if (!handle.valid() || session_key.empty() || account_id.empty() || !ensure_schema(*handle.db)) {
@@ -75,23 +94,26 @@ bool upsert_proxy_sticky_session(
     }
 
     constexpr const char* kSql = R"SQL(
-INSERT INTO proxy_sticky_sessions(session_key, account_id, updated_at_ms, expires_at_ms)
-VALUES (?1, ?2, ?3, ?4)
+INSERT INTO proxy_sticky_sessions(session_key, account_id, kind, updated_at_ms, expires_at_ms)
+VALUES (?1, ?2, ?3, ?4, ?5)
 ON CONFLICT(session_key) DO UPDATE SET
     account_id = excluded.account_id,
+    kind = excluded.kind,
     updated_at_ms = excluded.updated_at_ms,
     expires_at_ms = excluded.expires_at_ms;
 )SQL";
 
     const std::int64_t safe_ttl_ms = std::max<std::int64_t>(1, ttl_ms);
     const std::int64_t expires_at_ms = now_ms + safe_ttl_ms;
+    const auto normalized_kind = normalize_sticky_session_kind(kind);
 
     try {
         SQLite::Statement stmt(*handle.db, kSql);
         stmt.bind(1, std::string(session_key));
         stmt.bind(2, std::string(account_id));
-        stmt.bind(3, now_ms);
-        stmt.bind(4, expires_at_ms);
+        stmt.bind(3, normalized_kind);
+        stmt.bind(4, now_ms);
+        stmt.bind(5, expires_at_ms);
         return stmt.exec() > 0;
     } catch (...) {
         return false;
@@ -173,7 +195,7 @@ list_proxy_sticky_sessions(sqlite3* db, const std::size_t limit, const std::size
     }
 
     constexpr const char* kSql = R"SQL(
-SELECT session_key, account_id, updated_at_ms, expires_at_ms
+SELECT session_key, account_id, kind, updated_at_ms, expires_at_ms
 FROM proxy_sticky_sessions
 ORDER BY updated_at_ms DESC, session_key ASC
 LIMIT ?1 OFFSET ?2;
@@ -193,10 +215,13 @@ LIMIT ?1 OFFSET ?2;
                 record.account_id = stmt.getColumn(1).getString();
             }
             if (!stmt.getColumn(2).isNull()) {
-                record.updated_at_ms = stmt.getColumn(2).getInt64();
+                record.kind = normalize_sticky_session_kind(stmt.getColumn(2).getString());
             }
             if (!stmt.getColumn(3).isNull()) {
-                record.expires_at_ms = stmt.getColumn(3).getInt64();
+                record.updated_at_ms = stmt.getColumn(3).getInt64();
+            }
+            if (!stmt.getColumn(4).isNull()) {
+                record.expires_at_ms = stmt.getColumn(4).getInt64();
             }
             if (record.session_key.empty() || record.account_id.empty()) {
                 continue;

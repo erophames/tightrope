@@ -26,16 +26,41 @@ TEST_CASE("sticky session repository stores and expires account mappings", "[db]
     REQUIRE(db != nullptr);
 
     REQUIRE(tightrope::db::ensure_proxy_sticky_session_schema(db));
-    REQUIRE(tightrope::db::upsert_proxy_sticky_session(db, "session-1", "acc-1", /*now_ms=*/1000, /*ttl_ms=*/500));
-    REQUIRE(tightrope::db::upsert_proxy_sticky_session(db, "session-2", "acc-2", /*now_ms=*/1500, /*ttl_ms=*/800));
+    REQUIRE(tightrope::db::upsert_proxy_sticky_session(
+        db,
+        "session-1",
+        "acc-1",
+        /*now_ms=*/1000,
+        /*ttl_ms=*/500,
+        "prompt_cache"
+    ));
+    REQUIRE(tightrope::db::upsert_proxy_sticky_session(
+        db,
+        "session-2",
+        "acc-2",
+        /*now_ms=*/1500,
+        /*ttl_ms=*/800,
+        "codex_session"
+    ));
+    REQUIRE(tightrope::db::upsert_proxy_sticky_session(
+        db,
+        "session-3",
+        "acc-3",
+        /*now_ms=*/1700,
+        /*ttl_ms=*/600
+    ));
 
     const auto listed = tightrope::db::list_proxy_sticky_sessions(db, 10, 0);
-    REQUIRE(listed.size() == 2);
-    REQUIRE(listed[0].session_key == "session-2");
-    REQUIRE(listed[0].account_id == "acc-2");
-    REQUIRE(listed[0].updated_at_ms == 1500);
+    REQUIRE(listed.size() == 3);
+    REQUIRE(listed[0].session_key == "session-3");
+    REQUIRE(listed[0].account_id == "acc-3");
+    REQUIRE(listed[0].kind == "sticky_thread");
+    REQUIRE(listed[0].updated_at_ms == 1700);
     REQUIRE(listed[0].expires_at_ms == 2300);
-    REQUIRE(listed[1].session_key == "session-1");
+    REQUIRE(listed[1].session_key == "session-2");
+    REQUIRE(listed[1].kind == "codex_session");
+    REQUIRE(listed[2].session_key == "session-1");
+    REQUIRE(listed[2].kind == "prompt_cache");
 
     const auto active = tightrope::db::find_proxy_sticky_session_account(db, "session-1", /*now_ms=*/1200);
     REQUIRE(active.has_value());

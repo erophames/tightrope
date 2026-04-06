@@ -13,6 +13,7 @@ namespace tightrope::server::controllers {
 struct StickySessionPayload {
     std::string session_key;
     std::string account_id;
+    std::string kind = "sticky_thread";
     std::int64_t updated_at_ms = 0;
     std::int64_t expires_at_ms = 0;
 };
