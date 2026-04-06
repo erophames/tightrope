@@ -1,0 +1,174 @@
+import { act, render, within, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, test, vi } from 'vitest';
+import type { Account, RouteMetrics } from '../../../shared/types';
+import { RouterPoolPane } from './RouterPoolPane';
+
+function makeAccount(id: string, name: string): Account {
+  return {
+    id,
+    name,
+    pinned: false,
+    plan: 'plus',
+    health: 'healthy',
+    state: 'active',
+    inflight: 0,
+    load: 0,
+    latency: 0,
+    errorEwma: 0,
+    cooldown: false,
+    capability: true,
+    costNorm: 0,
+    routed24h: 0,
+    stickyHit: 0,
+    quotaPrimary: 0,
+    quotaSecondary: 0,
+    failovers: 0,
+    note: '',
+    telemetryBacked: false,
+  };
+}
+
+function accountRowByName(name: string): HTMLElement {
+  const rowLabel = Array.from(document.querySelectorAll('.account-item .account-name')).find(
+    (element) => element.textContent?.trim() === name,
+  );
+  const row = rowLabel?.closest('.account-item');
+  if (!(row instanceof HTMLElement)) {
+    throw new Error(`Account row not found for ${name}`);
+  }
+  return row;
+}
+
+function lockButtonForAccount(name: string): HTMLElement {
+  return within(accountRowByName(name)).getByRole('button', { name: /toggle routing lock group/i });
+}
+
+function accountListOrder(container: HTMLElement): string[] {
+  return Array.from(container.querySelectorAll('.account-item .account-name')).map((element) => element.textContent?.trim() ?? '');
+}
+
+describe('RouterPoolPane lock selection', () => {
+  test(
+    'delays moving a newly formed lock group to the top by 5 seconds',
+    async () => {
+      const user = userEvent.setup();
+      const onUpdateLockedRoutingAccountIds = vi.fn(async () => true);
+      const accounts = [
+        makeAccount('acc-top', 'alpha@test.local'),
+        makeAccount('acc-middle', 'bravo@test.local'),
+        makeAccount('acc-bottom', 'charlie@test.local'),
+      ];
+
+      const { container } = render(
+        <RouterPoolPane
+          accounts={accounts}
+          metrics={new Map<string, RouteMetrics>()}
+          routedAccountId={null}
+          lockedRoutingAccountIds={[]}
+          recentRouteActivityByAccount={new Map<string, number>()}
+          trafficNowMs={Date.now()}
+          trafficActiveWindowMs={30_000}
+          selectedAccountId="acc-top"
+          onSelectAccount={vi.fn()}
+          onTogglePin={vi.fn()}
+          onUpdateLockedRoutingAccountIds={onUpdateLockedRoutingAccountIds}
+          onOpenAddAccount={vi.fn()}
+        />,
+      );
+
+      await user.click(lockButtonForAccount('alpha@test.local'));
+      await user.keyboard('[ShiftLeft>]');
+      await user.click(lockButtonForAccount('charlie@test.local'));
+      await user.keyboard('[/ShiftLeft]');
+
+      expect(lockButtonForAccount('alpha@test.local')).toHaveClass('lock-grouped');
+      expect(lockButtonForAccount('charlie@test.local')).toHaveClass('lock-grouped');
+      expect(lockButtonForAccount('bravo@test.local')).not.toHaveClass('lock-grouped');
+      expect(onUpdateLockedRoutingAccountIds).toHaveBeenLastCalledWith(['acc-top', 'acc-bottom']);
+
+      expect(accountListOrder(container)).toEqual(['alpha@test.local', 'bravo@test.local', 'charlie@test.local']);
+
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 5_200));
+      });
+      expect(accountListOrder(container)).toEqual(['alpha@test.local', 'charlie@test.local', 'bravo@test.local']);
+    },
+    15_000,
+  );
+
+  test('keeps non-adjacent shift selections from an existing lock group via shift-toggle', async () => {
+    const user = userEvent.setup();
+    const onUpdateLockedRoutingAccountIds = vi.fn(async () => true);
+    const accounts = [
+      makeAccount('acc-top', 'alpha@test.local'),
+      makeAccount('acc-middle', 'bravo@test.local'),
+      makeAccount('acc-bottom', 'charlie@test.local'),
+    ];
+
+    render(
+      <RouterPoolPane
+        accounts={accounts}
+        metrics={new Map<string, RouteMetrics>()}
+        routedAccountId={null}
+        lockedRoutingAccountIds={['acc-top', 'acc-middle']}
+        recentRouteActivityByAccount={new Map<string, number>()}
+        trafficNowMs={Date.now()}
+        trafficActiveWindowMs={30_000}
+        selectedAccountId="acc-top"
+        onSelectAccount={vi.fn()}
+        onTogglePin={vi.fn()}
+        onUpdateLockedRoutingAccountIds={onUpdateLockedRoutingAccountIds}
+        onOpenAddAccount={vi.fn()}
+      />,
+    );
+
+    await user.keyboard('[ShiftLeft>]');
+    await user.click(lockButtonForAccount('bravo@test.local'));
+    await user.click(lockButtonForAccount('charlie@test.local'));
+    await user.keyboard('[/ShiftLeft]');
+
+    await waitFor(() => {
+      expect(lockButtonForAccount('alpha@test.local')).toHaveClass('lock-grouped');
+      expect(lockButtonForAccount('charlie@test.local')).toHaveClass('lock-grouped');
+      expect(lockButtonForAccount('bravo@test.local')).not.toHaveClass('lock-grouped');
+      expect(onUpdateLockedRoutingAccountIds).toHaveBeenLastCalledWith(['acc-top', 'acc-bottom']);
+    });
+  });
+
+  test('removing one lock from a multi-account group keeps the remaining locks', async () => {
+    const user = userEvent.setup();
+    const onUpdateLockedRoutingAccountIds = vi.fn(async () => true);
+    const accounts = [
+      makeAccount('acc-top', 'alpha@test.local'),
+      makeAccount('acc-middle', 'bravo@test.local'),
+      makeAccount('acc-bottom', 'charlie@test.local'),
+    ];
+
+    render(
+      <RouterPoolPane
+        accounts={accounts}
+        metrics={new Map<string, RouteMetrics>()}
+        routedAccountId={null}
+        lockedRoutingAccountIds={['acc-top', 'acc-middle', 'acc-bottom']}
+        recentRouteActivityByAccount={new Map<string, number>()}
+        trafficNowMs={Date.now()}
+        trafficActiveWindowMs={30_000}
+        selectedAccountId="acc-top"
+        onSelectAccount={vi.fn()}
+        onTogglePin={vi.fn()}
+        onUpdateLockedRoutingAccountIds={onUpdateLockedRoutingAccountIds}
+        onOpenAddAccount={vi.fn()}
+      />,
+    );
+
+    await user.click(lockButtonForAccount('bravo@test.local'));
+
+    await waitFor(() => {
+      expect(lockButtonForAccount('alpha@test.local')).toHaveClass('lock-grouped');
+      expect(lockButtonForAccount('charlie@test.local')).toHaveClass('lock-grouped');
+      expect(lockButtonForAccount('bravo@test.local')).not.toHaveClass('lock-grouped');
+      expect(onUpdateLockedRoutingAccountIds).toHaveBeenLastCalledWith(['acc-top', 'acc-bottom']);
+    });
+  });
+});

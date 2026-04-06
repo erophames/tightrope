@@ -1,0 +1,17 @@
+build/
+build-debug/
+node_modules/
+dist/
+*.node
+.DS_Store
+compile_commands.json
+vcpkg_installed/
+vcpkg/
+.local-py/
+.electron-dev/
+build-electron/
+build-electron-debug/
+app/release/
+app/native/
+.cache
+store.db

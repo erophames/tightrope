@@ -1,0 +1,210 @@
+import type { Account } from '../../shared/types';
+
+interface AccountsSidebarProps {
+  filteredAccounts: Account[];
+  totalAccounts: number;
+  selectedAccountDetail: Account | null;
+  accountSearchQuery: string;
+  accountStatusFilter: '' | 'active' | 'paused' | 'rate_limited' | 'deactivated' | 'quota_blocked';
+  isRefreshingAllTelemetry: boolean;
+  onOpenAddAccount: () => void;
+  onRefreshAllTelemetry: () => Promise<void>;
+  onSearch: (query: string) => void;
+  onFilterStatus: (status: '' | 'active' | 'paused' | 'rate_limited' | 'deactivated' | 'quota_blocked') => void;
+  onSelectDetail: (accountId: string) => void;
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function primaryQuotaWindowLabel(account: Account): string {
+  const windowSeconds = account.quotaPrimaryWindowSeconds;
+  if (typeof windowSeconds === 'number' && Number.isFinite(windowSeconds) && windowSeconds > 0) {
+    if (windowSeconds <= 6 * 60 * 60) {
+      return '5-hour';
+    }
+    if (windowSeconds >= 6 * 24 * 60 * 60) {
+      return 'Weekly';
+    }
+    if (windowSeconds >= 20 * 60 * 60 && windowSeconds <= 28 * 60 * 60) {
+      return 'Daily';
+    }
+    const roundedHours = Math.round(windowSeconds / (60 * 60));
+    if (roundedHours >= 1 && roundedHours <= 23) {
+      return `${roundedHours}-hour`;
+    }
+    const roundedDays = Math.round(windowSeconds / (24 * 60 * 60));
+    if (roundedDays >= 2) {
+      return `${roundedDays}-day`;
+    }
+  }
+  return account.plan === 'free' ? 'Weekly' : '5-hour';
+}
+
+function accountStateBadgeClass(state: Account['state']): string {
+  switch (state) {
+    case 'paused':
+      return 'warn';
+    case 'rate_limited':
+      return 'rate-limited';
+    case 'quota_blocked':
+      return 'quota-blocked';
+    case 'deactivated':
+      return 'error';
+    default:
+      return 'error';
+  }
+}
+
+function accountAttentionReason(account: Account): string | null {
+  if (account.usageRefreshStatus === 'auth_required' || account.needsTokenRefresh === true) {
+    return 'Token refresh required';
+  }
+
+  return null;
+}
+
+export function AccountsSidebar({
+  filteredAccounts,
+  totalAccounts,
+  selectedAccountDetail,
+  accountSearchQuery,
+  accountStatusFilter,
+  isRefreshingAllTelemetry,
+  onOpenAddAccount,
+  onRefreshAllTelemetry,
+  onSearch,
+  onFilterStatus,
+  onSelectDetail,
+}: AccountsSidebarProps) {
+  return (
+    <div className="accounts-sidebar">
+      <header className="section-header">
+        <div>
+          <p className="eyebrow">Imported</p>
+          <h2>Accounts</h2>
+        </div>
+        <div className="accounts-header-actions">
+          <button
+            className="tool-btn"
+            type="button"
+            disabled={isRefreshingAllTelemetry || totalAccounts === 0}
+            onClick={() => {
+              void onRefreshAllTelemetry();
+            }}
+          >
+            {isRefreshingAllTelemetry ? 'Refreshing…' : 'Refresh all'}
+          </button>
+          <button className="tool-btn" type="button" onClick={onOpenAddAccount}>
+            + Add
+          </button>
+        </div>
+      </header>
+      <div className="accounts-filter-bar">
+        <input
+          className="search"
+          type="search"
+          placeholder="Search accounts..."
+          aria-label="Search accounts"
+          value={accountSearchQuery}
+          onChange={(event) => onSearch(event.target.value)}
+        />
+        <select value={accountStatusFilter} aria-label="Filter by status" onChange={(event) => onFilterStatus(event.target.value as AccountsSidebarProps['accountStatusFilter'])}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="paused">Paused</option>
+          <option value="rate_limited">Rate limited</option>
+          <option value="quota_blocked">Quota blocked</option>
+          <option value="deactivated">Deactivated</option>
+        </select>
+      </div>
+      <div className="pane-body">
+        <div className="accounts-list">
+          {filteredAccounts.length === 0 ? (
+            <div className="empty-detail">
+              <span>No matching accounts</span>
+            </div>
+          ) : (
+            filteredAccounts.map((account) => {
+              const attentionReason = accountAttentionReason(account);
+              const stateLabel =
+                account.state === 'active' ? null : (
+                  <span className={`status-badge ${accountStateBadgeClass(account.state)}`}>{account.state.replace('_', ' ')}</span>
+                );
+              const primaryUsage = account.telemetryBacked ? clampPercent(account.quotaPrimary) : null;
+              const primaryRemaining = primaryUsage === null ? 0 : Math.max(0, 100 - primaryUsage);
+              const secondaryUsage =
+                account.telemetryBacked && account.hasSecondaryQuota ? clampPercent(account.quotaSecondary) : null;
+              const secondaryRemaining = secondaryUsage === null ? 0 : Math.max(0, 100 - secondaryUsage);
+              const primaryWindowLabel = primaryQuotaWindowLabel(account);
+              return (
+                <div
+                  key={account.id}
+                  className={`account-item${account.id === selectedAccountDetail?.id ? ' active' : ''}${attentionReason ? ' needs-attention' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onSelectDetail(account.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onSelectDetail(account.id);
+                    }
+                  }}
+                >
+                  <div className="account-top">
+                    <span className="account-name" title={account.name}>
+                      {account.name}
+                    </span>
+                    {attentionReason ? (
+                      <span className="account-top-right">
+                        <span
+                          className="attention-sign"
+                          role="img"
+                          aria-label={`Needs attention: ${attentionReason}`}
+                          title={attentionReason}
+                        >
+                          <span className="attention-sign-mark">!</span>
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="account-status-row">
+                    <span className="account-status-meta">
+                      <span className="account-plan">{account.plan}</span>
+                      {stateLabel}
+                    </span>
+                  </div>
+                  <div className="account-meta-row">
+                    <span className="account-meta">
+                      {primaryWindowLabel} left <strong>{primaryUsage === null ? '—' : `${primaryRemaining}%`}</strong>
+                    </span>
+                  </div>
+                  <div className="quota-stack">
+                    <div className="mini-bar quota-track" aria-label={`${primaryWindowLabel} quota remaining`}>
+                      <div
+                        className={`mini-fill quota-fill${primaryUsage !== null && primaryUsage >= 80 ? ' hot' : ''}`}
+                        style={{ width: `${primaryRemaining}%` }}
+                      />
+                    </div>
+                    {secondaryUsage !== null ? (
+                      <div className="mini-bar quota-track quota-secondary-track" aria-label="Weekly quota remaining">
+                        <div
+                          className={`mini-fill quota-fill quota-fill-secondary${secondaryUsage >= 80 ? ' hot' : ''}`}
+                          style={{ width: `${secondaryRemaining}%` }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

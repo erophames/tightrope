@@ -1,0 +1,49 @@
+#include <catch2/catch_test_macros.hpp>
+
+#include <filesystem>
+#include <string>
+
+#include <sqlite3.h>
+
+#include "controllers/sessions_controller.h"
+#include "repositories/session_repo.h"
+
+namespace {
+
+std::string make_temp_db_path() {
+    const auto file = std::filesystem::temp_directory_path() /
+                      std::filesystem::path("tightrope-sessions-controller.sqlite3");
+    std::filesystem::remove(file);
+    return file.string();
+}
+
+} // namespace
+
+TEST_CASE("sessions controller lists sticky sessions from persistence", "[server][sessions]") {
+    const auto db_path = make_temp_db_path();
+    sqlite3* db = nullptr;
+    REQUIRE(sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) == SQLITE_OK);
+    REQUIRE(db != nullptr);
+
+    REQUIRE(tightrope::db::ensure_proxy_sticky_session_schema(db));
+    REQUIRE(tightrope::db::upsert_proxy_sticky_session(db, "ak_prompt_1", "acc-1", /*now_ms=*/2000, /*ttl_ms=*/500));
+    REQUIRE(tightrope::db::upsert_proxy_sticky_session(db, "turn_abc", "acc-2", /*now_ms=*/2500, /*ttl_ms=*/1000));
+
+    const auto all = tightrope::server::controllers::list_sticky_sessions(10, 0, db);
+    REQUIRE(all.status == 200);
+    REQUIRE(all.generated_at_ms > 0);
+    REQUIRE(all.sessions.size() == 2);
+    REQUIRE(all.sessions[0].session_key == "turn_abc");
+    REQUIRE(all.sessions[0].account_id == "acc-2");
+    REQUIRE(all.sessions[0].updated_at_ms == 2500);
+    REQUIRE(all.sessions[0].expires_at_ms == 3500);
+    REQUIRE(all.sessions[1].session_key == "ak_prompt_1");
+
+    const auto paged = tightrope::server::controllers::list_sticky_sessions(1, 1, db);
+    REQUIRE(paged.status == 200);
+    REQUIRE(paged.sessions.size() == 1);
+    REQUIRE(paged.sessions[0].session_key == "ak_prompt_1");
+
+    sqlite3_close(db);
+    std::filesystem::remove(db_path);
+}

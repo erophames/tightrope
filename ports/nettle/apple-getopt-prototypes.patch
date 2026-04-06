@@ -1,0 +1,26 @@
+diff --git a/getopt.h b/getopt.h
+index 078f88ce7..4d625b7b9 100644
+--- a/getopt.h
++++ b/getopt.h
+@@ -166,7 +166,7 @@ extern int getopt (int ___argc, char *const *___argv, const char *__shortopts)
+ #  endif
+ # endif
+ #else /* not __GNU_LIBRARY__ */
+-extern int getopt ();
++extern int getopt (int ___argc, char *const *___argv, const char *__shortopts);
+ #endif /* __GNU_LIBRARY__ */
+ 
+ #ifndef __need_getopt
+diff --git a/getopt.c b/getopt.c
+index 42df5a6d8..17e7aa17e 100644
+--- a/getopt.c
++++ b/getopt.c
+@@ -138,7 +138,7 @@ static struct _getopt_data getopt_data;
+    whose names are inconsistent.  */
+ 
+ #ifndef getenv
+-extern char *getenv ();
++extern char *getenv (const char *);
+ #endif
+ 
+ #endif /* not __GNU_LIBRARY__ */

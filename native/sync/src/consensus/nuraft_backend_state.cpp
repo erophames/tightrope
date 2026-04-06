@@ -1,0 +1,98 @@
+#include "consensus/internal/nuraft_backend_components.h"
+
+#include <exception>
+
+#include "sync_event_emitter.h"
+
+namespace tightrope::sync::consensus::nuraft_backend::internal {
+
+void NoopLogger::put_details(
+    const int,
+    const char*,
+    const char*,
+    const std::size_t,
+    const std::string&
+) {}
+
+InMemoryStateMachine::InMemoryStateMachine(
+    const nuraft::ptr<nuraft::cluster_config>& config,
+    std::shared_ptr<SqliteRaftStorage> storage)
+    : config_(clone_cluster_config(*config)),
+      snapshot_(nuraft::cs_new<nuraft::snapshot>(0, 0, clone_cluster_config(*config_))),
+      storage_(std::move(storage))
+{
+    if (storage_) {
+        auto recovered = storage_->load_all_committed();
+        std::lock_guard<std::mutex> lock(mutex_);
+        committed_payloads_ = std::move(recovered);
+        auto max_idx = storage_->max_committed_index();
+        if (max_idx.has_value()) {
+            commit_index_.store(*max_idx);
+        }
+    }
+}
+
+InMemoryStateMachine::InMemoryStateMachine(const nuraft::ptr<nuraft::cluster_config>& config)
+    : InMemoryStateMachine(config, nullptr) {}
+
+nuraft::ptr<nuraft::buffer> InMemoryStateMachine::commit(const nuraft::ulong log_idx, nuraft::buffer& data) {
+    const auto* bytes = data.data_begin();
+    const auto size = data.size();
+
+    if (storage_) {
+        storage_->append_committed(log_idx, bytes, size);
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    committed_payloads_.emplace_back(reinterpret_cast<const char*>(bytes), size);
+    commit_index_.store(log_idx);
+    SyncEventEmitter::get().emit(SyncEventCommitAdvance{
+        .commit_index = static_cast<std::uint64_t>(log_idx),
+        .last_applied = static_cast<std::uint64_t>(log_idx),
+    });
+    return nullptr;
+}
+
+bool InMemoryStateMachine::apply_snapshot(nuraft::snapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    snapshot_ = nuraft::cs_new<nuraft::snapshot>(
+        snapshot.get_last_log_idx(),
+        snapshot.get_last_log_term(),
+        clone_cluster_config(*snapshot.get_last_config())
+    );
+    commit_index_.store(snapshot.get_last_log_idx());
+    return true;
+}
+
+nuraft::ptr<nuraft::snapshot> InMemoryStateMachine::last_snapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return snapshot_;
+}
+
+nuraft::ulong InMemoryStateMachine::last_commit_index() {
+    return commit_index_.load();
+}
+
+void InMemoryStateMachine::create_snapshot(
+    nuraft::snapshot& snapshot,
+    nuraft::async_result<bool>::handler_type& when_done
+) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_ = nuraft::cs_new<nuraft::snapshot>(
+            snapshot.get_last_log_idx(),
+            snapshot.get_last_log_term(),
+            clone_cluster_config(*snapshot.get_last_config())
+        );
+    }
+    bool result = true;
+    nuraft::ptr<std::exception> err(nullptr);
+    when_done(result, err);
+}
+
+std::size_t InMemoryStateMachine::committed_entry_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return committed_payloads_.size();
+}
+
+} // namespace tightrope::sync::consensus::nuraft_backend::internal

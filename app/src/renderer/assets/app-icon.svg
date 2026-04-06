@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Tightrope app icon">
+  <defs>
+    <linearGradient id="bg" x1="36" y1="24" x2="220" y2="232" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#172421" />
+      <stop offset="1" stop-color="#0d1513" />
+    </linearGradient>
+    <linearGradient id="ropeA" x1="78" y1="88" x2="178" y2="126" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4dd2ff" />
+      <stop offset="1" stop-color="#6df2c7" />
+    </linearGradient>
+    <linearGradient id="ropeB" x1="78" y1="122" x2="178" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd166" />
+      <stop offset="1" stop-color="#ff9f5a" />
+    </linearGradient>
+    <linearGradient id="spine" x1="128" y1="72" x2="128" y2="182" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8be3c7" />
+      <stop offset="1" stop-color="#6fb8ff" />
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="12" y="12" width="232" height="232" rx="56" fill="url(#bg)" stroke="#31403b" stroke-width="3" />
+
+  <g fill="none" stroke-linecap="round" stroke-width="18" filter="url(#softGlow)">
+    <path d="M128 76V182" stroke="url(#spine)" />
+    <path d="M78 92C98 70 158 70 178 92" stroke="url(#ropeA)" />
+    <path d="M78 120C102 146 154 146 178 120" stroke="url(#ropeB)" />
+  </g>
+
+  <circle cx="78" cy="92" r="6" fill="#89dcff" />
+  <circle cx="178" cy="92" r="6" fill="#89dcff" />
+  <circle cx="78" cy="120" r="6" fill="#ffd48a" />
+  <circle cx="178" cy="120" r="6" fill="#ffd48a" />
+</svg>

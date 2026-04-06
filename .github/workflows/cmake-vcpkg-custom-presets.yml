@@ -1,0 +1,157 @@
+name: CMake with vcpkg and custom presets
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.cmake_generator }} / ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Intel lane
+          - os: macos-15-intel
+            build_type: Debug
+            build_testing: ON
+            configure_preset: debug
+            build_preset: debug
+            cmake_generator: Ninja
+            run_tests: true
+          - os: macos-15-intel
+            build_type: Release
+            build_testing: OFF
+            configure_preset: default
+            build_preset: default
+            cmake_generator: Ninja
+            run_tests: false
+          # macOS Apple Silicon lane
+          - os: macos-latest
+            build_type: Debug
+            build_testing: ON
+            configure_preset: debug
+            build_preset: debug
+            cmake_generator: Ninja
+            run_tests: true
+          - os: windows-latest
+            build_type: Debug
+            build_testing: ON
+            configure_preset: debug
+            build_preset: debug
+            cmake_generator: Ninja
+            run_tests: true
+          - os: windows-latest
+            build_type: Release
+            build_testing: OFF
+            configure_preset: default
+            build_preset: default
+            cmake_generator: Ninja
+            run_tests: false
+
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve vcpkg triplet
+        id: triplet
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            arch="$(uname -m)"
+            if [[ "$arch" == "arm64" || "$arch" == "aarch64" ]]; then
+              triplet="arm64-osx-static"
+            else
+              triplet="x64-osx-static"
+            fi
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            arch="$(echo "${PROCESSOR_ARCHITECTURE:-AMD64}" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$arch" == "arm64" ]]; then
+              triplet="arm64-windows-static-md"
+            else
+              triplet="x64-windows-static-md"
+            fi
+          else
+            echo "Unsupported runner OS: $RUNNER_OS" >&2
+            exit 1
+          fi
+          echo "value=$triplet" >> "$GITHUB_OUTPUT"
+
+      - name: Export build environment
+        shell: bash
+        run: |
+          echo "VCPKG_DEFAULT_TRIPLET=${{ steps.triplet.outputs.value }}" >> "$GITHUB_ENV"
+          echo "VCPKG_TARGET_TRIPLET=${{ steps.triplet.outputs.value }}" >> "$GITHUB_ENV"
+          echo "VCPKG_OVERLAY_PORTS=${{ github.workspace }}/ports" >> "$GITHUB_ENV"
+          echo "CMAKE_GENERATOR=${{ matrix.cmake_generator }}" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_OS" == "macOS" || "$RUNNER_OS" == "Windows" ]]; then
+            echo "VCPKG_INSTALL_OPTIONS=--allow-unsupported" >> "$GITHUB_ENV"
+          fi
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo rm -rf /Library/Developer/CoreSimulator
+          brew cleanup
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install autoconf autoconf-archive automake libtool
+
+      - name: Get CMake and Ninja
+        uses: lukka/get-cmake@latest
+
+      - name: Ensure Ninja is available (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja --yes --no-progress
+          }
+          ninja --version
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+          vcpkgGitCommitId: 'b5d1a94fb7f88fd835e360fd23a45a09ceedbf48'
+
+      - name: Configure and build with CMake presets
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: ${{ matrix.configure_preset }}
+          configurePresetAdditionalArgs: >-
+            ['-DVCPKG_TARGET_TRIPLET=${{ steps.triplet.outputs.value }}',
+            '-DVCPKG_INSTALL_OPTIONS=--allow-unsupported',
+            '-DCMAKE_BUILD_TYPE=${{ matrix.build_type }}',
+            '-DBUILD_TESTING=${{ matrix.build_testing }}']
+          buildPreset: ${{ matrix.build_preset }}
+          buildPresetAdditionalArgs: "['--config', '${{ matrix.build_type }}']"
+
+      - name: Run native tests (debug jobs)
+        if: matrix.run_tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidates=(
+            "build-debug/tightrope-tests"
+            "build-debug/Debug/tightrope-tests"
+            "build-debug/tightrope-tests.exe"
+            "build-debug/Debug/tightrope-tests.exe"
+          )
+          for test_bin in "${candidates[@]}"; do
+            if [[ -f "$test_bin" ]]; then
+              echo "Running $test_bin"
+              "$test_bin" --reporter console
+              exit 0
+            fi
+          done
+          echo "tightrope-tests binary not found in expected locations." >&2
+          exit 1
