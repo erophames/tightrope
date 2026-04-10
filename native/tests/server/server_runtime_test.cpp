@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "upstream_transport.h"
 #include "server.h"
 #include "server/runtime_test_utils.h"
 
@@ -186,6 +187,26 @@ class RuntimeWsClient final {
     boost::asio::io_context io_context_{1};
     boost::asio::ip::tcp::resolver resolver_;
     boost::beast::websocket::stream<boost::beast::tcp_stream> ws_;
+};
+
+class DelayedWebsocketUpstreamTransport final : public tightrope::proxy::UpstreamTransport {
+  public:
+    tightrope::proxy::UpstreamExecutionResult execute(const tightrope::proxy::openai::UpstreamRequestPlan&) override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+        return {
+            .status = 101,
+            .body = {},
+            .events =
+                {
+                    R"({"type":"response.created","response":{"id":"resp_runtime_heartbeat","status":"in_progress"}})",
+                    R"({"type":"response.completed","response":{"id":"resp_runtime_heartbeat","object":"response","status":"completed","output":[]}})",
+                },
+            .headers = {},
+            .accepted = true,
+            .close_code = 1000,
+            .error_code = {},
+        };
+    }
 };
 
 } // namespace
@@ -451,5 +472,31 @@ TEST_CASE("runtime websocket close cancels backend codex upstream bridge session
     REQUIRE(upstream.request_count() == 1);
 
     REQUIRE(runtime.stop());
+    std::filesystem::remove(db_path);
+}
+
+TEST_CASE("runtime websocket sends in-flight heartbeats during slow upstream turns", "[server][runtime][ws][heartbeat]") {
+    tightrope::tests::server::EnvVarGuard db_path_guard{"TIGHTROPE_DB_PATH"};
+    tightrope::tests::server::EnvVarGuard heartbeat_guard{"TIGHTROPE_RESPONSES_WS_HEARTBEAT_INTERVAL_MS"};
+    const auto db_path = tightrope::tests::server::make_temp_runtime_db_path();
+    REQUIRE(db_path_guard.set(db_path));
+    REQUIRE(heartbeat_guard.set("500"));
+
+    tightrope::proxy::set_upstream_transport(std::make_shared<DelayedWebsocketUpstreamTransport>());
+
+    tightrope::server::Runtime runtime;
+    const auto port = tightrope::tests::server::next_runtime_port();
+    REQUIRE(runtime.start(tightrope::server::RuntimeConfig{.host = "127.0.0.1", .port = port}));
+
+    {
+        RuntimeWsClient client(port, "/v1/responses", "runtime-heartbeat-1");
+        const auto frames = client.send_and_read(R"({"model":"gpt-5.4","input":"slow-turn"})", 2);
+        REQUIRE(frames.size() == 2);
+        REQUIRE(frames.front().find(R"("type":"response.created")") != std::string::npos);
+        REQUIRE(frames.back().find(R"("type":"response.completed")") != std::string::npos);
+    }
+
+    REQUIRE(runtime.stop());
+    tightrope::proxy::reset_upstream_transport();
     std::filesystem::remove(db_path);
 }

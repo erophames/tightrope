@@ -2,15 +2,19 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -62,6 +66,46 @@ struct RequestContext {
 };
 
 constexpr std::size_t kResponsesWsMaxPayloadBytes = 16u * 1024u * 1024u;
+constexpr int kDefaultResponsesWsIdleTimeoutSeconds = 30;
+constexpr int kDefaultResponsesWsHeartbeatIntervalMs = 5000;
+
+int env_positive_int_or_default(const char* key, const int fallback) {
+    if (key == nullptr || fallback <= 0) {
+        return fallback;
+    }
+    const char* raw = std::getenv(key);
+    if (raw == nullptr || raw[0] == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    const long value = std::strtol(raw, &end, 10);
+    if (end == raw || value <= 0 || value > static_cast<long>(std::numeric_limits<int>::max())) {
+        return fallback;
+    }
+    return static_cast<int>(value);
+}
+
+int configured_responses_ws_idle_timeout_seconds() {
+    return std::clamp(
+        env_positive_int_or_default(
+            "TIGHTROPE_RESPONSES_WS_IDLE_TIMEOUT_SECONDS",
+            kDefaultResponsesWsIdleTimeoutSeconds
+        ),
+        4,
+        600
+    );
+}
+
+int configured_responses_ws_heartbeat_interval_ms() {
+    return std::clamp(
+        env_positive_int_or_default(
+            "TIGHTROPE_RESPONSES_WS_HEARTBEAT_INTERVAL_MS",
+            kDefaultResponsesWsHeartbeatIntervalMs
+        ),
+        250,
+        60000
+    );
+}
 
 std::string current_unix_ms_string() {
     const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
@@ -174,6 +218,74 @@ std::shared_ptr<WsConnectionHandle> find_ws_connection(const std::string& connec
     }
     return it->second;
 }
+
+class WsInFlightHeartbeat final {
+  public:
+    WsInFlightHeartbeat(uWS::Loop* loop, std::string connection_id, const int interval_ms)
+        : loop_(loop),
+          connection_id_(std::move(connection_id)),
+          interval_(std::chrono::milliseconds(interval_ms > 0 ? interval_ms : 1)) {
+        if (loop_ == nullptr || connection_id_.empty()) {
+            return;
+        }
+        worker_ = std::thread([this] { run(); });
+    }
+
+    WsInFlightHeartbeat(const WsInFlightHeartbeat&) = delete;
+    WsInFlightHeartbeat& operator=(const WsInFlightHeartbeat&) = delete;
+
+    ~WsInFlightHeartbeat() {
+        stop();
+    }
+
+    void stop() {
+        bool expected = false;
+        if (!stopped_.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            return;
+        }
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+  private:
+    void run() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        while (!stopped_.load(std::memory_order_relaxed)) {
+            if (cv_.wait_for(lock, interval_, [this] { return stopped_.load(std::memory_order_relaxed); })) {
+                break;
+            }
+            lock.unlock();
+            if (loop_ != nullptr && !connection_id_.empty()) {
+                loop_->defer([connection_id = connection_id_] {
+                    auto connection_handle = find_ws_connection(connection_id);
+                    if (connection_handle == nullptr) {
+                        return;
+                    }
+                    ResponsesWs* active_ws = nullptr;
+                    {
+                        std::lock_guard<std::mutex> handle_lock(connection_handle->mutex);
+                        active_ws = connection_handle->ws;
+                    }
+                    if (active_ws == nullptr) {
+                        return;
+                    }
+                    active_ws->send(std::string_view{}, uWS::OpCode::PING);
+                });
+            }
+            lock.lock();
+        }
+    }
+
+    uWS::Loop* loop_ = nullptr;
+    std::string connection_id_;
+    std::chrono::milliseconds interval_{1000};
+    std::thread worker_{};
+    std::mutex mutex_{};
+    std::condition_variable cv_{};
+    std::atomic_bool stopped_{false};
+};
 
 template <typename Fn>
 bool run_proxy_request_async(const std::shared_ptr<std::atomic_bool>& aborted, Fn&& fn) {
@@ -903,8 +1015,10 @@ void wire_codex_usage_route(uWS::App& app, const std::string& path) {
 }
 
 void wire_ws_route(uWS::App& app, const std::string& path) {
+    const auto ws_idle_timeout_seconds = configured_responses_ws_idle_timeout_seconds();
+    const auto ws_heartbeat_interval_ms = configured_responses_ws_heartbeat_interval_ms();
     uWS::App::WebSocketBehavior<WsRequestContext> behavior{};
-    behavior.idleTimeout = 30;
+    behavior.idleTimeout = static_cast<unsigned short>(ws_idle_timeout_seconds);
     behavior.maxPayloadLength = kResponsesWsMaxPayloadBytes;
     behavior.compression = uWS::DISABLED;
     behavior.upgrade = [path](uWS::HttpResponse<false>* res, uWS::HttpRequest* req, us_socket_context_t* context) {
@@ -960,7 +1074,7 @@ void wire_ws_route(uWS::App& app, const std::string& path) {
         }
         unregister_ws_connection(ws);
     };
-    behavior.message = [](ResponsesWs* ws, std::string_view message, uWS::OpCode op) {
+    behavior.message = [ws_heartbeat_interval_ms](ResponsesWs* ws, std::string_view message, uWS::OpCode op) {
         if (op != uWS::OpCode::TEXT && op != uWS::OpCode::BINARY) {
             return;
         }
@@ -1022,13 +1136,15 @@ void wire_ws_route(uWS::App& app, const std::string& path) {
              message_request_id = std::move(message_request_id),
              request_body = std::move(request_body),
              binary_payload,
-             message_mutex = std::move(message_mutex)](
+             message_mutex = std::move(message_mutex),
+             ws_heartbeat_interval_ms](
                 uWS::Loop* loop,
                 const std::shared_ptr<std::atomic_bool>&
             ) mutable {
                 if (loop == nullptr) {
                     return;
                 }
+                WsInFlightHeartbeat heartbeat(loop, connection_id, ws_heartbeat_interval_ms);
                 const auto process_message = [&]() {
                     auto reservation_db = controllers::open_controller_db();
                     const auto reservation =
