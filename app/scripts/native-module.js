@@ -23,13 +23,20 @@ function resolveBuildMode() {
 }
 
 const buildMode = resolveBuildMode();
-const cmakeConfig = buildMode === 'debug' ? 'Debug' : 'Release';
+// On Windows the vcpkg triplet x64-windows-static-md only ships release-CRT libs
+// (/MD), and several ports in our graph (nuraft, SQLiteCpp, tomlplusplus, libuv) do
+// not produce a debug variant at all. Mixing a Debug-config tightrope-core (_DEBUG,
+// _ITERATOR_DEBUG_LEVEL=2) with release-CRT static libs produces LNK2038 runtime-
+// library mismatches. Aliasing debug -> release on Windows gives us a single
+// buildable native module that still loads fine into Electron's release runtime.
+const effectiveBuildMode = process.platform === 'win32' ? 'release' : buildMode;
+const cmakeConfig = effectiveBuildMode === 'debug' ? 'Debug' : 'Release';
 // IMPORTANT: Keep these mode->output mappings in lockstep with app/src/main/native.ts.
 // Debug must stay isolated in build-electron-debug (do NOT reuse build-debug, which is
 // used by non-cmake-js/test builds and can produce incompatible addon binaries).
-const cmakeOutDir = buildMode === 'debug' ? '../build-electron-debug' : '../build';
+const cmakeOutDir = effectiveBuildMode === 'debug' ? '../build-electron-debug' : '../build';
 
-function nativeModuleCandidatesForMode(mode = buildMode) {
+function nativeModuleCandidatesForMode(mode = effectiveBuildMode) {
   if (mode === 'debug') {
     return [
       path.join(repoRoot, 'build-electron-debug', 'Debug', 'tightrope-core.node'),
@@ -233,7 +240,7 @@ function expectedBuildMetadata() {
     runtimeVersion: version,
     platform: process.platform,
     arch: process.arch,
-    buildMode,
+    buildMode: effectiveBuildMode,
   };
 }
 
@@ -265,6 +272,29 @@ function buildSpawnEnv() {
   return env;
 }
 
+function pruneStaleWindowsBuildDir(buildDir) {
+  // On Windows, an aborted cmake-js configure can leave behind a CMakeCache.txt
+  // without the generated *.vcxproj files. cmake-js then skips configure on the
+  // next run and MSBuild fails with "MSB1009: Project file does not exist".
+  // Detect that state and wipe the directory so configure runs from scratch.
+  if (process.platform !== 'win32') {
+    return;
+  }
+  if (!fs.existsSync(buildDir)) {
+    return;
+  }
+  const cachePath = path.join(buildDir, 'CMakeCache.txt');
+  if (!fs.existsSync(cachePath)) {
+    return;
+  }
+  const hasVcxproj = walkFiles(buildDir, (fullPath) => /\.vcxproj$/i.test(fullPath)).length > 0;
+  if (hasVcxproj) {
+    return;
+  }
+  console.log(`[native] stale build directory detected (no .vcxproj); removing ${buildDir}`);
+  fs.rmSync(buildDir, { recursive: true, force: true });
+}
+
 function runBuild() {
   const { version: electronVersion } = readElectronVersion();
   const metadata = expectedBuildMetadata();
@@ -274,6 +304,8 @@ function runBuild() {
   if (!fs.existsSync(cmakeJsCli)) {
     throw new Error('cmake-js is not installed. Run `npm --prefix app install` first.');
   }
+
+  pruneStaleWindowsBuildDir(path.resolve(appDir, cmakeOutDir));
 
   const toolchainFileFromEnv = process.env.CMAKE_TOOLCHAIN_FILE;
   const defaultToolchainPath = path.join(repoRoot, 'vcpkg', 'scripts', 'buildsystems', 'vcpkg.cmake');
@@ -316,7 +348,7 @@ function runBuild() {
   const command = process.execPath;
   const commandArgs = [cmakeJsCli, ...cmakeArgs];
   console.log(
-    `[native] Building tightrope-core.node (${buildMode} mode; node ${path.relative(appDir, cmakeJsCli)} ${cmakeArgs.join(' ')})`
+    `[native] Building tightrope-core.node (${effectiveBuildMode} mode; node ${path.relative(appDir, cmakeJsCli)} ${cmakeArgs.join(' ')})`
   );
   const result = spawnSync(command, commandArgs, {
     cwd: appDir,
@@ -361,7 +393,7 @@ function shouldRebuild() {
   if (!hasMatchingMetadata) {
     return {
       rebuild: true,
-      reason: `native module metadata is missing or does not match current Electron platform/runtime/mode (${buildMode})`,
+      reason: `native module metadata is missing or does not match current Electron platform/runtime/mode (${effectiveBuildMode})`,
     };
   }
 
@@ -399,7 +431,10 @@ function shouldRebuild() {
 
 function main() {
   try {
-    console.log(`[native] target mode=${buildMode} config=${cmakeConfig}`);
+    if (buildMode !== effectiveBuildMode) {
+      console.log(`[native] target mode=${buildMode} aliased to ${effectiveBuildMode} on ${process.platform}`);
+    }
+    console.log(`[native] target mode=${effectiveBuildMode} config=${cmakeConfig}`);
     if (forceRebuild) {
       if (dryRun) {
         console.log('[native] --dry-run: force rebuild requested.');
