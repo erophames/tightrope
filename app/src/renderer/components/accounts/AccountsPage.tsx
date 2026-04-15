@@ -14,6 +14,7 @@ export function AccountsPage() {
         filteredAccounts={accounts.filteredAccounts}
         totalAccounts={accounts.accounts.length}
         selectedAccountDetail={accounts.selectedAccountDetail}
+        trafficNowMs={accounts.trafficClockMs}
         accountSearchQuery={accounts.accountSearchQuery}
         accountStatusFilter={accounts.accountStatusFilter}
         onOpenAddAccount={accounts.openAddAccountDialog}

@@ -39,12 +39,13 @@ function accountFixture(overrides: Partial<Account> = {}): Account {
   };
 }
 
-function renderSidebar(accounts: Account[]): void {
+function renderSidebar(accounts: Account[], trafficNowMs = Date.now()): void {
   render(
     <AccountsSidebar
       filteredAccounts={accounts}
       totalAccounts={accounts.length}
       selectedAccountDetail={null}
+      trafficNowMs={trafficNowMs}
       accountSearchQuery=""
       accountStatusFilter=""
       isRefreshingAllTelemetry={false}
@@ -87,5 +88,28 @@ describe('AccountsSidebar attention indicator', () => {
     ]);
 
     expect(screen.queryByLabelText(/Needs attention:/i)).not.toBeInTheDocument();
+  });
+
+  test('shows weekly countdown alongside short-window countdown for paid accounts', () => {
+    const nowMs = 1_700_000_000_000;
+    renderSidebar(
+      [
+        accountFixture({
+          id: 'acc_weekly',
+          name: 'weekly@test.local',
+          quotaPrimary: 40,
+          quotaSecondary: 15,
+          hasSecondaryQuota: true,
+          quotaPrimaryResetAtMs: nowMs + 2 * 60 * 60 * 1000,
+          quotaSecondaryResetAtMs: nowMs + 3 * 24 * 60 * 60 * 1000,
+        }),
+      ],
+      nowMs,
+    );
+
+    const row = screen.getByText('weekly@test.local').closest('.account-item');
+    expect(row).not.toBeNull();
+    expect(row).toHaveTextContent(/5-hour left/i);
+    expect(row).toHaveTextContent(/Weekly left/i);
   });
 });

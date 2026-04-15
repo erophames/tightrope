@@ -1287,6 +1287,10 @@
         min-width: 0;
       }
 
+      .account-meta-row-secondary {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
       .account-top {
         align-items: center;
       }

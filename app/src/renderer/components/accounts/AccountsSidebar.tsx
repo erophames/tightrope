@@ -4,6 +4,7 @@ interface AccountsSidebarProps {
   filteredAccounts: Account[];
   totalAccounts: number;
   selectedAccountDetail: Account | null;
+  trafficNowMs: number;
   accountSearchQuery: string;
   accountStatusFilter: '' | 'active' | 'paused' | 'rate_limited' | 'deactivated' | 'quota_blocked';
   isRefreshingAllTelemetry: boolean;
@@ -13,6 +14,8 @@ interface AccountsSidebarProps {
   onFilterStatus: (status: '' | 'active' | 'paused' | 'rate_limited' | 'deactivated' | 'quota_blocked') => void;
   onSelectDetail: (accountId: string) => void;
 }
+
+const MAX_UNIX_SECONDS_BEFORE_MS = 10_000_000_000;
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) {
@@ -45,6 +48,75 @@ function primaryQuotaWindowLabel(account: Account): string {
   return account.plan === 'free' ? 'Weekly' : '5-hour';
 }
 
+function normalizeResetAtMs(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  if (value < MAX_UNIX_SECONDS_BEFORE_MS) {
+    return Math.trunc(value * 1000);
+  }
+  return Math.trunc(value);
+}
+
+function formatResetCountdown(resetAtMs: number | null, nowMs: number): string | null {
+  if (resetAtMs === null || !Number.isFinite(resetAtMs) || resetAtMs <= 0) {
+    return null;
+  }
+  const remainingMs = Math.max(0, resetAtMs - nowMs);
+  const totalMinutes = Math.ceil(remainingMs / (60 * 1000));
+  if (totalMinutes <= 0) {
+    return 'now';
+  }
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) {
+    if (hours > 0) {
+      return `${days}d${hours}h${minutes}m`;
+    }
+    return `${days}d${minutes}m`;
+  }
+  if (hours > 0) {
+    return `${hours}h${minutes}m`;
+  }
+  return `${minutes}m`;
+}
+
+function hasSupplementaryWeeklyQuota(account: Account): boolean {
+  const hasWindowSeconds =
+    typeof account.quotaSecondaryWindowSeconds === 'number' &&
+    Number.isFinite(account.quotaSecondaryWindowSeconds) &&
+    account.quotaSecondaryWindowSeconds > 0;
+  return (
+    account.plan !== 'free' &&
+    (account.hasSecondaryQuota === true || hasWindowSeconds || normalizeResetAtMs(account.quotaSecondaryResetAtMs) !== null)
+  );
+}
+
+function planPrimaryResetAtMs(account: Account): number | null {
+  const primaryReset = normalizeResetAtMs(account.quotaPrimaryResetAtMs);
+  const secondaryReset = normalizeResetAtMs(account.quotaSecondaryResetAtMs);
+  if (account.plan === 'free') {
+    return secondaryReset ?? primaryReset;
+  }
+  return primaryReset ?? secondaryReset;
+}
+
+function supplementaryWeeklyResetAtMs(account: Account): number | null {
+  if (!hasSupplementaryWeeklyQuota(account)) {
+    return null;
+  }
+  return normalizeResetAtMs(account.quotaSecondaryResetAtMs);
+}
+
+function formatRemainingLabel(remainingPercent: number | null, resetAtMs: number | null, nowMs: number): string {
+  if (remainingPercent === null) {
+    return '—';
+  }
+  const countdown = formatResetCountdown(resetAtMs, nowMs);
+  return countdown ? `${remainingPercent}% (${countdown})` : `${remainingPercent}%`;
+}
+
 function accountStateBadgeClass(state: Account['state']): string {
   switch (state) {
     case 'paused':
@@ -72,6 +144,7 @@ export function AccountsSidebar({
   filteredAccounts,
   totalAccounts,
   selectedAccountDetail,
+  trafficNowMs,
   accountSearchQuery,
   accountStatusFilter,
   isRefreshingAllTelemetry,
@@ -141,6 +214,18 @@ export function AccountsSidebar({
                 account.telemetryBacked && account.hasSecondaryQuota ? clampPercent(account.quotaSecondary) : null;
               const secondaryRemaining = secondaryUsage === null ? 0 : Math.max(0, 100 - secondaryUsage);
               const primaryWindowLabel = primaryQuotaWindowLabel(account);
+              const primaryRemainingLabel = formatRemainingLabel(
+                primaryUsage === null ? null : primaryRemaining,
+                planPrimaryResetAtMs(account),
+                trafficNowMs,
+              );
+              const weeklyRemainingLabel = primaryWindowLabel === '5-hour' && hasSupplementaryWeeklyQuota(account)
+                ? formatRemainingLabel(
+                    secondaryUsage === null ? null : secondaryRemaining,
+                    supplementaryWeeklyResetAtMs(account),
+                    trafficNowMs,
+                  )
+                : null;
               return (
                 <div
                   key={account.id}
@@ -180,9 +265,16 @@ export function AccountsSidebar({
                   </div>
                   <div className="account-meta-row">
                     <span className="account-meta">
-                      {primaryWindowLabel} left <strong>{primaryUsage === null ? '—' : `${primaryRemaining}%`}</strong>
+                      {primaryWindowLabel} left <strong>{primaryRemainingLabel}</strong>
                     </span>
                   </div>
+                  {weeklyRemainingLabel !== null ? (
+                    <div className="account-meta-row account-meta-row-secondary">
+                      <span className="account-meta">
+                        Weekly left <strong>{weeklyRemainingLabel}</strong>
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="quota-stack">
                     <div className="mini-bar quota-track" aria-label={`${primaryWindowLabel} quota remaining`}>
                       <div

@@ -66,6 +66,9 @@ const ROUTING_POOL_SORT_OPTIONS: ReadonlyArray<RoutingPoolSortOption & { key: Ro
   },
 ];
 
+const MAX_UNIX_SECONDS_BEFORE_MS = 10_000_000_000;
+const DAY_SECONDS = 24 * 60 * 60;
+
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -104,6 +107,16 @@ function hasPositiveFiniteNumber(value: number | null | undefined): value is num
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function normalizeResetAtMs(value: number | null | undefined): number | null {
+  if (!hasPositiveFiniteNumber(value)) {
+    return null;
+  }
+  if (value < MAX_UNIX_SECONDS_BEFORE_MS) {
+    return Math.trunc(value * 1000);
+  }
+  return Math.trunc(value);
+}
+
 function usesSecondaryAsPlanPrimary(account: Account): boolean {
   return (
     account.plan === 'free' &&
@@ -124,12 +137,89 @@ function planPrimaryUsagePercent(account: Account): number | null {
 }
 
 function accountResetAtMsForSort(account: Account): number | null {
-  const primaryReset = hasPositiveFiniteNumber(account.quotaPrimaryResetAtMs) ? account.quotaPrimaryResetAtMs : null;
-  const secondaryReset = hasPositiveFiniteNumber(account.quotaSecondaryResetAtMs) ? account.quotaSecondaryResetAtMs : null;
+  const primaryReset = normalizeResetAtMs(account.quotaPrimaryResetAtMs);
+  const secondaryReset = normalizeResetAtMs(account.quotaSecondaryResetAtMs);
   if (usesSecondaryAsPlanPrimary(account)) {
     return secondaryReset ?? primaryReset;
   }
   return primaryReset ?? secondaryReset;
+}
+
+interface ResetSortWindows {
+  weeklyResetAtMs: number | null;
+  shortResetAtMs: number | null;
+}
+
+function resolveResetSortWindows(account: Account): ResetSortWindows {
+  const primaryReset = normalizeResetAtMs(account.quotaPrimaryResetAtMs);
+  const secondaryReset = normalizeResetAtMs(account.quotaSecondaryResetAtMs);
+  const primaryWindowSeconds = hasPositiveFiniteNumber(account.quotaPrimaryWindowSeconds)
+    ? account.quotaPrimaryWindowSeconds
+    : null;
+  const secondaryWindowSeconds = hasPositiveFiniteNumber(account.quotaSecondaryWindowSeconds)
+    ? account.quotaSecondaryWindowSeconds
+    : null;
+
+  if (account.plan === 'free') {
+    return {
+      weeklyResetAtMs: secondaryReset ?? primaryReset,
+      shortResetAtMs: null,
+    };
+  }
+
+  let weeklyResetAtMs: number | null = null;
+  let shortResetAtMs: number | null = null;
+
+  const primaryLooksWeekly = primaryWindowSeconds !== null && primaryWindowSeconds >= DAY_SECONDS;
+  if (primaryLooksWeekly) {
+    weeklyResetAtMs = primaryReset;
+  } else {
+    shortResetAtMs = primaryReset;
+  }
+
+  const hasSecondary =
+    account.hasSecondaryQuota === true || secondaryWindowSeconds !== null || secondaryReset !== null;
+  if (hasSecondary) {
+    const secondaryLooksWeekly = secondaryWindowSeconds === null || secondaryWindowSeconds >= DAY_SECONDS;
+    if (secondaryLooksWeekly && weeklyResetAtMs === null) {
+      weeklyResetAtMs = secondaryReset;
+    } else if (!secondaryLooksWeekly && shortResetAtMs === null) {
+      shortResetAtMs = secondaryReset;
+    }
+  }
+
+  if (weeklyResetAtMs === null && hasSecondary && secondaryReset !== null) {
+    weeklyResetAtMs = secondaryReset;
+  }
+  if (weeklyResetAtMs === null && shortResetAtMs === null) {
+    shortResetAtMs = accountResetAtMsForSort(account);
+  }
+
+  return { weeklyResetAtMs, shortResetAtMs };
+}
+
+function hasSupplementaryWeeklyQuota(account: Account): boolean {
+  return (
+    account.plan !== 'free' &&
+    (account.hasSecondaryQuota === true ||
+      hasPositiveFiniteNumber(account.quotaSecondaryWindowSeconds) ||
+      normalizeResetAtMs(account.quotaSecondaryResetAtMs) !== null)
+  );
+}
+
+function supplementaryWeeklyResetAtMs(account: Account): number | null {
+  if (!hasSupplementaryWeeklyQuota(account)) {
+    return null;
+  }
+  return normalizeResetAtMs(account.quotaSecondaryResetAtMs);
+}
+
+function formatRemainingLabel(remainingPercent: number | null, resetAtMs: number | null, nowMs: number): string {
+  if (remainingPercent === null) {
+    return '—';
+  }
+  const resetCountdownLabel = formatResetCountdown(resetAtMs, nowMs);
+  return resetCountdownLabel ? `${remainingPercent}% (${resetCountdownLabel})` : `${remainingPercent}%`;
 }
 
 function formatResetCountdown(resetAtMs: number | null, nowMs: number): string | null {
@@ -205,6 +295,24 @@ function compareAccountsBySortKey(
 
   const leftResetAt = accountResetAtMsForSort(left);
   const rightResetAt = accountResetAtMsForSort(right);
+  const leftResetWindows = resolveResetSortWindows(left);
+  const rightResetWindows = resolveResetSortWindows(right);
+  const leftWeeklyRemainingMs =
+    leftResetWindows.weeklyResetAtMs === null ? null : Math.max(0, leftResetWindows.weeklyResetAtMs - nowMs);
+  const rightWeeklyRemainingMs =
+    rightResetWindows.weeklyResetAtMs === null ? null : Math.max(0, rightResetWindows.weeklyResetAtMs - nowMs);
+  const weeklyDelta = compareNullableNumbers(leftWeeklyRemainingMs, rightWeeklyRemainingMs, 'asc');
+  if (weeklyDelta !== 0) {
+    return weeklyDelta;
+  }
+  const leftShortRemainingMs =
+    leftResetWindows.shortResetAtMs === null ? null : Math.max(0, leftResetWindows.shortResetAtMs - nowMs);
+  const rightShortRemainingMs =
+    rightResetWindows.shortResetAtMs === null ? null : Math.max(0, rightResetWindows.shortResetAtMs - nowMs);
+  const shortDelta = compareNullableNumbers(leftShortRemainingMs, rightShortRemainingMs, 'asc');
+  if (shortDelta !== 0) {
+    return shortDelta;
+  }
   const leftRemainingMs = leftResetAt === null ? null : Math.max(0, leftResetAt - nowMs);
   const rightRemainingMs = rightResetAt === null ? null : Math.max(0, rightResetAt - nowMs);
   return compareNullableNumbers(leftRemainingMs, rightRemainingMs, 'asc');
@@ -761,9 +869,18 @@ export function RouterPoolPane({
             const stickyLabel = account.telemetryBacked ? `${Math.max(0, Math.round(account.stickyHit))}%` : '—';
             const failoverLabel = account.telemetryBacked ? `${Math.max(0, Math.round(account.failovers))}` : '—';
             const primaryWindowLabel = primaryQuotaWindowLabel(account);
-            const resetCountdownLabel = formatResetCountdown(accountResetAtMsForSort(account), trafficNowMs);
-            const primaryRemainingLabel =
-              primaryUsage === null ? '—' : `${primaryRemaining}%${resetCountdownLabel ? ` (${resetCountdownLabel})` : ''}`;
+            const primaryRemainingLabel = formatRemainingLabel(
+              primaryUsage === null ? null : primaryRemaining,
+              accountResetAtMsForSort(account),
+              trafficNowMs,
+            );
+            const weeklyRemainingLabel = primaryWindowLabel === '5-hour' && hasSupplementaryWeeklyQuota(account)
+              ? formatRemainingLabel(
+                  secondaryUsage === null ? null : secondaryRemaining,
+                  supplementaryWeeklyResetAtMs(account),
+                  trafficNowMs,
+                )
+              : null;
             return (
               <div
                 key={account.id}
@@ -875,6 +992,13 @@ export function RouterPoolPane({
                   </span>
                   <span className="account-meta">{metric?.capability ? 'eligible' : 'blocked'}</span>
                 </div>
+                {weeklyRemainingLabel !== null ? (
+                  <div className="account-meta-row account-meta-row-secondary">
+                    <span className="account-meta">
+                      Weekly left <strong>{weeklyRemainingLabel}</strong>
+                    </span>
+                  </div>
+                ) : null}
                 <div className="quota-stack">
                   <div className="mini-bar quota-track" aria-label={`${primaryWindowLabel} quota remaining`}>
                     <div className={`mini-fill quota-fill${primaryUsage !== null && primaryUsage >= 80 ? ' hot' : ''}`} style={{ width: `${primaryRemaining}%` }} />

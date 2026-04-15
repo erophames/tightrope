@@ -4,7 +4,7 @@ import { describe, expect, test, vi } from 'vitest';
 import type { Account, RouteMetrics } from '../../../shared/types';
 import { RouterPoolPane } from './RouterPoolPane';
 
-function makeAccount(id: string, name: string): Account {
+function makeAccount(id: string, name: string, overrides: Partial<Account> = {}): Account {
   return {
     id,
     name,
@@ -23,9 +23,16 @@ function makeAccount(id: string, name: string): Account {
     stickyHit: 0,
     quotaPrimary: 0,
     quotaSecondary: 0,
+    hasPrimaryQuota: false,
+    hasSecondaryQuota: false,
+    quotaPrimaryWindowSeconds: null,
+    quotaSecondaryWindowSeconds: null,
+    quotaPrimaryResetAtMs: null,
+    quotaSecondaryResetAtMs: null,
     failovers: 0,
     note: '',
     telemetryBacked: false,
+    ...overrides,
   };
 }
 
@@ -49,6 +56,113 @@ function accountListOrder(container: HTMLElement): string[] {
 }
 
 describe('RouterPoolPane lock selection', () => {
+  test('resetting soon sort prioritizes weekly reset then short-window reset', () => {
+    const nowMs = 1_700_000_000_000;
+    const accounts = [
+      makeAccount('acc_a', 'alpha@test.local', {
+        plan: 'plus',
+        telemetryBacked: true,
+        hasPrimaryQuota: true,
+        hasSecondaryQuota: true,
+        quotaPrimaryWindowSeconds: 18_000,
+        quotaSecondaryWindowSeconds: 604_800,
+        quotaPrimaryResetAtMs: nowMs + 4 * 60 * 60 * 1000,
+        quotaSecondaryResetAtMs: nowMs + 2 * 60 * 60 * 1000,
+      }),
+      makeAccount('acc_b', 'bravo@test.local', {
+        plan: 'plus',
+        telemetryBacked: true,
+        hasPrimaryQuota: true,
+        hasSecondaryQuota: true,
+        quotaPrimaryWindowSeconds: 18_000,
+        quotaSecondaryWindowSeconds: 604_800,
+        quotaPrimaryResetAtMs: nowMs + 10 * 60 * 1000,
+        quotaSecondaryResetAtMs: nowMs + 3 * 60 * 60 * 1000,
+      }),
+      makeAccount('acc_c', 'charlie@test.local', {
+        plan: 'free',
+        telemetryBacked: true,
+        hasPrimaryQuota: false,
+        hasSecondaryQuota: true,
+        quotaPrimaryWindowSeconds: null,
+        quotaSecondaryWindowSeconds: 604_800,
+        quotaPrimaryResetAtMs: null,
+        quotaSecondaryResetAtMs: nowMs + 150 * 60 * 1000,
+      }),
+      makeAccount('acc_d', 'delta@test.local', {
+        plan: 'plus',
+        telemetryBacked: true,
+        hasPrimaryQuota: true,
+        hasSecondaryQuota: true,
+        quotaPrimaryWindowSeconds: 18_000,
+        quotaSecondaryWindowSeconds: 604_800,
+        quotaPrimaryResetAtMs: nowMs + 30 * 60 * 1000,
+        quotaSecondaryResetAtMs: nowMs + 2 * 60 * 60 * 1000,
+      }),
+    ];
+
+    const { container } = render(
+      <RouterPoolPane
+        accounts={accounts}
+        metrics={new Map<string, RouteMetrics>()}
+        routedAccountId={null}
+        lockedRoutingAccountIds={[]}
+        recentRouteActivityByAccount={new Map<string, number>()}
+        trafficNowMs={nowMs}
+        trafficActiveWindowMs={30_000}
+        selectedAccountId="acc_a"
+        onSelectAccount={vi.fn()}
+        onTogglePin={vi.fn()}
+        onUpdateLockedRoutingAccountIds={vi.fn(async () => true)}
+        onOpenAddAccount={vi.fn()}
+      />,
+    );
+
+    expect(accountListOrder(container)).toEqual([
+      'delta@test.local',
+      'alpha@test.local',
+      'charlie@test.local',
+      'bravo@test.local',
+    ]);
+  });
+
+  test('shows weekly reset countdown alongside short-window countdown for paid accounts', () => {
+    const nowMs = 1_700_000_000_000;
+    render(
+      <RouterPoolPane
+        accounts={[
+          makeAccount('acc_plus', 'plus@test.local', {
+            plan: 'plus',
+            telemetryBacked: true,
+            hasPrimaryQuota: true,
+            hasSecondaryQuota: true,
+            quotaPrimary: 35,
+            quotaSecondary: 20,
+            quotaPrimaryWindowSeconds: 18_000,
+            quotaSecondaryWindowSeconds: 604_800,
+            quotaPrimaryResetAtMs: nowMs + 2 * 60 * 60 * 1000,
+            quotaSecondaryResetAtMs: nowMs + 3 * 24 * 60 * 60 * 1000,
+          }),
+        ]}
+        metrics={new Map<string, RouteMetrics>()}
+        routedAccountId={null}
+        lockedRoutingAccountIds={[]}
+        recentRouteActivityByAccount={new Map<string, number>()}
+        trafficNowMs={nowMs}
+        trafficActiveWindowMs={30_000}
+        selectedAccountId="acc_plus"
+        onSelectAccount={vi.fn()}
+        onTogglePin={vi.fn()}
+        onUpdateLockedRoutingAccountIds={vi.fn(async () => true)}
+        onOpenAddAccount={vi.fn()}
+      />,
+    );
+
+    const row = accountRowByName('plus@test.local');
+    expect(row).toHaveTextContent(/5-hour left/i);
+    expect(row).toHaveTextContent(/Weekly left/i);
+  });
+
   test(
     'delays moving a newly formed lock group to the top by 5 seconds',
     async () => {
