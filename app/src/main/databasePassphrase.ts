@@ -66,10 +66,7 @@ function resolveDatabasePath(): string {
   if (configured && configured.length > 0) {
     return path.resolve(configured);
   }
-  if (app.isPackaged) {
-    return path.join(app.getPath('userData'), 'store.db');
-  }
-  return path.resolve(process.cwd(), 'store.db');
+  return path.join(app.getPath('userData'), 'store.db');
 }
 
 function detectDatabaseState(dbPath: string): DatabaseState {

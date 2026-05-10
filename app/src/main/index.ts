@@ -53,10 +53,9 @@ function shouldAutoOpenDevTools(): boolean {
 }
 
 if (isDevSession) {
-  // Use Electron defaults in dev; overriding session/user data paths can break
-  // process bootstrap on some macOS setups.
   const devUserDataPath = path.resolve(process.cwd(), '.electron-dev');
   fs.mkdirSync(devUserDataPath, { recursive: true });
+  app.setPath('userData', devUserDataPath);
 }
 
 function isTightropeDeepLink(value: string): boolean {
